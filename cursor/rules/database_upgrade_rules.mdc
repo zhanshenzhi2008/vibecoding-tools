@@ -1,0 +1,201 @@
+---
+description: 数据库升级脚本编写规范
+alwaysApply: true
+globs:
+  - **/mysql_upgrade.sql
+  - **/mongodb_upgrade.sql
+  - **/milvus_upgrade.sql
+  - **/xxl-job_upgrade.sql
+---
+
+# 数据库升级脚本编写规范
+
+> **适用范围**：以下规则适用于 **llm-agent 项目**中的数据库升级脚本编写，包括 `mysql_upgrade.sql`、`mongodb_upgrade.sql`、`milvus_upgrade.sql`、`xxl-job_upgrade.sql`。所有升级脚本均采用**追加式维护**，禁止修改历史脚本内容。
+
+## SQL 文件位置
+
+| 文件 | 路径 | 用途 |
+|---|---|---|
+| **mysql_upgrade.sql** | `llm-agent\agent-platform-starter\db\mysql_upgrade.sql` | `llm_agent` 库的 MySQL 数据库升级脚本（DDL/DML） |
+| **mongodb_upgrade.sql** | `llm-agent\agent-platform-starter\db\mongodb_upgrade.sql` | MongoDB 升级脚本 |
+| **milvus_upgrade.sql** | `llm-agent\agent-platform-starter\db\milvus_upgrade.sql` | Milvus 升级脚本 |
+| **xxl-job_upgrade.sql** | `llm-agent\agent-platform-starter\db\xxl-job_upgrade.sql` | `xxl-job` 库的升级脚本 |
+
+---
+
+## 核心原则
+
+### 1. 所有升级脚本只允许追加
+
+**必须遵守**：
+
+- 只能在脚本文件末尾**追加**新的升级内容
+- **禁止**修改、删除、覆盖历史脚本
+- **禁止**为了“整理格式”而改动旧语句顺序
+- **禁止**直接回写已上线环境执行过的历史升级内容
+
+### 2. 历史脚本不可变更
+
+原因：
+
+- 历史升级脚本可能已经在不同环境执行过
+- 修改旧脚本会导致环境间升级记录不一致
+- 容易引发重复执行、执行失败或数据结构漂移
+
+### 3. 正确做法
+
+```sql
+-- ✅ 正确：只在文件末尾追加新版本升级内容
+-- 2026-06-10 新增 xxx 字段
+ALTER TABLE `llm_agent`.`llm_demo`
+    ADD COLUMN `demo_field` varchar(255) NULL COMMENT '示例字段' AFTER `name`;
+```
+
+```sql
+-- ❌ 错误：回头修改旧日期下的历史 SQL
+-- ❌ 错误：删除之前已经存在的升级记录
+-- ❌ 错误：把旧 SQL 挪到别的位置重新整理
+```
+
+---
+
+## MySQL 脚本编写规范
+
+### 1. 新增字段
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD COLUMN `column_name` varchar(255) NULL COMMENT '字段说明' AFTER `上一个字段名`;
+```
+
+### 2. 修改字段
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    MODIFY COLUMN `column_name` varchar(255) NULL COMMENT '修改后的说明' AFTER `上一个字段名`;
+```
+
+### 3. 新增表
+
+```sql
+-- 日期 + 简短说明
+CREATE TABLE `llm_agent`.`表名` (
+    `id` bigint NOT NULL,
+    `name` varchar(255) NULL COMMENT '字段说明',
+    PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='表说明';
+```
+
+### 4. 新增索引
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD INDEX `idx_xxx` (`column_name`);
+```
+
+### 5. 唯一索引
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD UNIQUE INDEX `uk_xxx` (`column1`, `column2`);
+```
+
+### 6. 新增数据
+
+```sql
+-- 日期 + 简短说明
+INSERT INTO `llm_agent`.`sys_system_config` (`id`, `type`, `config_key`, `description`, `value`, `env_flag`)
+VALUES (xxx, 'type', 'key', '说明', 'value', b'0');
+```
+
+### 7. 新增 meta_table_column 记录
+
+```sql
+-- 日期 + 简短说明
+INSERT INTO `llm_agent`.`meta_table_column` 
+(`id`, `table_id`, `column_name`, `column_type`, `column_comment`, `nullable`, `column_default`, `max_length`, `dimension`, `vector_type`, `is_graph`, `is_index`, `index_type`, `display_length`, `display_order`, `create_time`, `update_time`) 
+VALUES (xxx, xxx, 'column_name', 'varchar', '字段说明', b'1', NULL, 255, NULL, NULL, 0, NULL, 0, 50, 10, '2026-05-28 18:00:00', '2026-05-28 18:00:00');
+```
+
+---
+
+## MongoDB / Milvus / XXL-JOB 脚本补充规则
+
+### 1. MongoDB 升级脚本
+
+- 在 `mongodb_upgrade.sql` 中同样按时间顺序**只追加**新内容
+- 每次升级内容前添加日期和变更说明
+- 禁止改写历史集合初始化、索引初始化、历史迁移脚本
+
+### 2. Milvus 升级脚本
+
+- 在 `milvus_upgrade.sql` 中同样按时间顺序**只追加**新内容
+- 每次升级内容前添加日期和变更说明
+- 禁止修改已存在的历史 collection、index、field 初始化脚本
+
+### 3. XXL-JOB 升级脚本
+
+- `xxl-job_upgrade.sql` 仅用于 **`xxl-job` 库** 的升级脚本维护
+- 同样按时间顺序**只追加**新内容
+- 每次升级内容前添加日期和变更说明
+- 禁止修改已存在的历史表结构初始化或历史升级语句
+
+### 4. 四类脚本统一要求
+
+- 新内容统一追加在文件末尾
+- 升级说明尽量简洁明确，便于排查问题
+- 如需修复历史问题，应新增一段“修复脚本”，不要直接改旧脚本
+
+---
+
+## 注意事项
+
+### 日期格式
+```
+格式：YYYY-MM-DD
+示例：2026-05-28
+```
+
+### 注释格式
+- 单行注释：`-- 注释内容`
+- 日期 + 简短说明作为注释头
+
+### 数据库名
+- MySQL 统一使用：`` `llm_agent` ``
+
+### ID 生成规则
+- 使用雪花算法生成 ID
+- 或使用 `Select max(id) + 1 from xxx` 查询最大值
+
+### nullable 字段
+- `b'0'` = 非空
+- `b'1'` = 可空
+
+### 批量操作
+多个相关操作写在一起，用空行分隔：
+
+```sql
+-- 2026-05-28 新增字段
+ALTER TABLE `llm_agent`.`llm_tool_integration`
+    ADD COLUMN `source_table` varchar(100) NULL COMMENT '来源表名' AFTER `tool_type`;
+
+ALTER TABLE `llm_agent`.`llm_tool_integration`
+    ADD INDEX `idx_source_table` (`source_table`);
+```
+
+---
+
+## 快速检查清单
+
+- [ ] 是否只在脚本末尾追加内容？
+- [ ] 是否没有修改历史升级脚本？
+- [ ] 是否明确区分 `mysql_upgrade.sql`、`mongodb_upgrade.sql`、`milvus_upgrade.sql`、`xxl-job_upgrade.sql`？
+- [ ] 日期格式正确（YYYY-MM-DD）？
+- [ ] MySQL 是否使用 `` `llm_agent` `` 作为数据库名？
+- [ ] 新增字段是否有 AFTER 指定位置？
+- [ ] 字段是否有 COMMENT 说明？
+- [ ] ID 值是否唯一不冲突？

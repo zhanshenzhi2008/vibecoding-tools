@@ -1,0 +1,217 @@
+---
+description: Java 代码注释与命名规范
+alwaysApply: true
+globs:
+  - **/*.java
+---
+
+# Java 代码注释与命名规范
+
+## 一、注释规范
+
+### 1.1 POJO 属性注释 — 使用单行注释 `/** */`
+
+Java 类的 private、protected、public 成员变量，统一使用单行注释 `/** */`：
+
+```java
+public class UserDTO {
+
+    /** 用户ID */
+    private Long id;
+
+    /** 用户名称 */
+    private String name;
+
+    /** 用户状态：0-禁用，1-启用 */
+    private Integer status;
+
+    /** 是否删除 */
+    private Boolean deleted;
+
+    /** 创建时间 */
+    private LocalDateTime createTime;
+}
+```
+
+**禁止**使用多行注释或行注释：
+
+```java
+// 错误示例
+/* 用户ID */
+private Long id;
+
+// 错误示例
+// 用户ID
+private Long id;
+```
+
+### 1.2 常量注释 — 使用单行注释 `/** */`
+
+static final / final static 修饰的常量，同样使用单行注释：
+
+```java
+public class Constants {
+
+    /** 缓存 key 前缀 */
+    public static final String CACHE_KEY_PREFIX = "cache:";
+
+    /** 默认分页大小 */
+    public static final int DEFAULT_PAGE_SIZE = 10;
+
+    /** 最大重试次数 */
+    public static final int MAX_RETRY_COUNT = 3;
+}
+```
+
+### 1.3 方法注释 — 使用 Javadoc 多行注释
+
+public 方法应使用 Javadoc 多行注释：
+
+```java
+/**
+ * 根据ID查询用户信息
+ *
+ * @param id 用户ID
+ * @return 用户详情，不存在返回null
+ */
+public UserDTO getUserById(Long id) {
+    // ...
+}
+```
+
+### 1.4 类注释 — 使用 Javadoc 多行注释
+
+类顶部应添加 Javadoc，必须包含 `@author` 和 `@date`：
+
+```java
+/**
+ * 用户数据传输对象
+ * 用于用户模块的接口数据交换
+ *
+ * @author jun.liu61
+ * @date 2026-04-28 16:23:34
+ */
+@Data
+public class UserDTO {
+    // ...
+}
+```
+
+**注意**：
+- `@author`：创建者用户名，如 `jun.liu61`
+- `@date`：创建时间，格式为 `yyyy-MM-dd HH:mm:ss`，使用当前时间
+
+## 二、命名规范
+
+### 2.1 POJO 字段命名
+
+- 使用驼峰命名（camelCase）
+- 布尔字段避免使用 is 前缀
+- 集合类型使用复数名词或带有 List/Set/Map 后缀
+
+```java
+/** 用户名称 */
+private String userName;
+
+/** 用户列表 */
+private List<UserDTO> userList;
+
+/** 是否启用 */
+private Boolean enabled;
+
+/** 禁用状态（语义更清晰） */
+private Boolean disabled;
+```
+
+### 2.2 常量命名
+
+- 全大写下划线分隔（UPPER_SNAKE_CASE）
+- 有意义的分组可使用内部类组织
+
+```java
+public class StatusEnum {
+    /** 待处理 */
+    public static final int PENDING = 0;
+    /** 处理中 */
+    public static final int PROCESSING = 1;
+    /** 已完成 */
+    public static final int COMPLETED = 2;
+}
+```
+
+## 三、示例对比
+
+### 正确示例
+
+```java
+package com.example.dto;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+
+/**
+ * 订单数据传输对象
+ */
+@Data
+public class OrderDTO {
+
+    /** 订单ID */
+    private Long id;
+
+    /** 订单编号 */
+    private String orderNo;
+
+    /** 订单金额 */
+    private java.math.BigDecimal amount;
+
+    /** 订单状态：0-待支付，1-已支付，2-已取消 */
+    private Integer status;
+
+    /** 订单明细列表 */
+    private List<OrderItemDTO> items;
+
+    /** 创建时间 */
+    private LocalDateTime createTime;
+
+    /** 更新时间 */
+    private LocalDateTime updateTime;
+}
+```
+
+### 错误示例
+
+```java
+package com.example.dto;
+
+import lombok.Data;
+
+// 错误：类没有注释
+@Data
+public class OrderDTO {
+
+    // 错误：使用行注释
+    private Long id;
+
+    /* 错误：使用多行注释 */
+    private String orderNo;
+
+    // 错误：没有注释
+    private java.math.BigDecimal amount;
+
+    // 错误：注释不清晰
+    private Integer status;
+
+    private List<OrderItemDTO> items;
+
+    private LocalDateTime createTime;
+}
+```
+
+## 四、快速检查清单
+
+- [ ] 所有成员变量是否有 `/** */` 单行注释？
+- [ ] 所有常量是否有 `/** */` 单行注释？
+- [ ] public 方法是否有 Javadoc？
+- [ ] 类是否有 Javadoc 头部注释？
+- [ ] 注释是否清晰描述了字段/常量的含义？
+- [ ] 枚举值是否有注释说明每个值的含义？

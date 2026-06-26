@@ -1,0 +1,158 @@
+---
+description: Cursor IDE Agent 开发规则索引
+alwaysApply: true
+---
+
+# Agent 开发规则索引
+
+---
+
+## 规则文件
+
+| 文件 | 适用场景 |
+|---|---|
+| `agent_feedback_rules.mdc` | Agent 开发使用反馈（DSL语法、路径转义、Shell执行等） |
+| `create-agent-script.mdc` | Agent 创建规范（命名、存储路径、语法参考、act/agt/fn语法说明） |
+| `agent_comment_tags_rules.mdc` | **注释标签规则** - `//#`、`//##`、`//^`、`//$` 前端展示与折叠 |
+| `agent_file_encoding_rules.mdc` | **文件编码规范** - 必须使用 UTF-8 without BOM |
+| `windows-shell-rules.mdc` | **Windows Shell 规则** - 优先使用 Git Bash 执行命令 |
+| `llm-agent-logs.mdc` | **日志分析规则** - 日志目录、核心概念、过滤方法 |
+| `database_upgrade_rules.mdc` | **数据库升级规范** - `mysql_upgrade.sql`、`mongodb_upgrade.sql`、`milvus_upgrade.sql`、`xxl-job_upgrade.sql` 统一追加式维护规则 |
+| `java_code_edit_rules.mdc` | **Java 代码修改规范** - 修改代码时保持原有编码 |
+| `java-development-rules.mdc` | **Java 开发规范** - DateUtil、Entity、注释、GenericService+QLInfo 查询 |
+
+---
+
+## MCP 工具配置
+
+| 配置位置 | 说明 |
+|----------|------|
+| `F:\gientech-repository\.cursor\mcps\db-tools\` | 数据库工具 MCP（MySQL/MongoDB） |
+| 环境配置目录 | `F:\gientech-repository\env\` |
+
+---
+
+## 触发关键词
+
+**创建/编写 agent 时**：创建 agent、新建脚本、命名、存储路径、act_xxx、fn.xxx
+
+**遇到问题时**：when()、assign()、foreach、terminal_command、`?:`、`?.size():`、`{{}}`、嵌套模板、路径转义、Unexpected character、Git Bash、`fn.json`、JSON 赋值、特殊字符转义
+
+**act_plan.run 相关**：act_plan.run、TaskResult、status字段、success字段、死循环、工具执行结果
+
+**注释标签相关**：`//#`、`//##`、`//^`、`//$`、前端展示、折叠
+
+**SQL 相关**：mysql_upgrade、mongodb_upgrade、milvus_upgrade、xxl-job_upgrade、DDL、ALTER TABLE、CREATE TABLE、升级脚本、追加维护
+
+**Java 开发相关**：DateUtil、BaseEntity、GenericService、QLInfo、andClause、分页查询、setDisablePermissionFilter、块字符串 SQL
+
+**Java 编辑相关**：import、全限定类名、格式化、编码、BOM
+
+**MCP/数据库相关**：MCP、db-tools、数据库查询、MySQL、MongoDB、环境切换、switch_env
+
+---
+
+## 核心规则摘要
+
+### 1. Agent 调用语法（重要！）
+
+**错误写法**：
+```groovy
+// ❌ 使用 / 分隔路径
+smart_build_deploy/agt_check_git?os={{n_os}}
+```
+
+**正确写法**：
+```groovy
+// ✅ 直接调用（同一目录下）
+agt_hello?user={{name}}
+
+// ✅ 带包名调用（推荐，可避免名称冲突）
+agt_check_git.smart_build_deploy?os={{n_os}}
+
+// ✅ 多级包名
+agt_xx.a.b.c?参数=值
+```
+
+**包名对应规则**：
+| 文件路径 | 包名 | 调用语法 |
+|---------|------|---------|
+| `.../agt/assistant/agt_xx.txt` | `assistant` | `agt_xx.assistant?参数` |
+| `.../agt/chatdoc/demo/agt_xx.txt` | `chatdoc.demo` | `agt_xx.chatdoc.demo?参数` |
+
+### 2. when() 条件中不能用方法调用
+先 `act_func?script='''...'''` 计算布尔值，再 `when('n_xxx', {...})`
+
+### 3. 三元运算符要用 `?:` 或 `? :`（有空格）
+```groovy
+// ✅ 
+def len = n_data?.size() ?: 0
+def len = n_data ? n_data.size() : 0
+```
+
+### 4. 含 `|` 命令要用 assign 变量
+```groovy
+assign('n_cmd', 'where bash | findstr /i "Git"')
+terminal_command={{n_cmd}}
+```
+
+### 5. script 块内反斜杠写 `\\\\`
+```groovy
+path.replace('\\\\', '/')  // 要表示一个反斜杠
+```
+
+### 6. Windows 路径统一转正斜杠
+```groovy
+path.replace('\\\\', '/')  // 在 Groovy 里转换
+```
+
+### 7. Windows 下用 Git Bash，不用 PowerShell
+
+### 8. act_plan.run 调用结果判断
+
+`act_plan.run` 返回的对象是 `TaskResult.java` 序列化后的 JSON：
+
+```json
+{"status":"SUCCESS","result":null,"source":"agt_xxx.assistant"}
+```
+
+**没有 `success` 字段，只有 `status` 字段！**
+
+```groovy
+// ✅ 正确：使用 status 字段判断
+when("n_tool_exec.status == 'SUCCESS'", { ... })
+
+// ❌ 错误：没有 success 字段
+when('n_tool_exec.success == true', { ... })
+```
+
+如果需要子 agent 返回执行状态，必须在脚本中主动包装包含 `status` 字段的 JSON 返回值。
+
+### 9. JSON 赋值优先使用 `fn.json()`
+
+变量值含特殊字符（引号、换行等）时，避免直接拼接 JSON 字符串：
+
+```groovy
+// ❌ 不推荐：变量值含特殊字符时易出错
+assign('resultTip', '{"status":"SUCCESS","result":"{{n_tool_exec_result}}"}')
+```
+
+`fn.json` 只有一个参数，写法固定为逗号分隔的 `key,refValue,key,refValue...`：
+
+```groovy
+fn.json('key1,refValue1,key2,refValue2,...')
+```
+
+refValue 区分变量和静态值靠首尾引号/斜杠：
+- **变量**：直接写变量名，如 `n_plan_run_tool_exec`
+- **静态字符串**：用双引号 `"xxx"` 或单引号 `'xxx'` 包裹
+- **含逗号的静态值**：用斜杠包裹 `/xxx/`，逗号不参与分割
+
+**fn.json 参数内含双引号和单引号时，外层 assign 必须用三引号 `'''...'''` 包裹，否则 agent 刷新报错：**
+
+```groovy
+assign('resultTip', '''{{fn.json("status,'SUCCESS',result,n_plan_run_tool_exec,source,confirmed_tool.name")}}''')
+assign('n_result', '''{{fn.json("status,'操作成功',result,n_data,folderPath,/Coding/agent/")}}''')
+```
+
+**注意**：`fn.json` 只有单参数写法，不支持多参数调用。
