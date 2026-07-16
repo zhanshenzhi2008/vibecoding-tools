@@ -1,0 +1,147 @@
+# =============================================================================
+# 生产级 docker-compose 模板
+# 配套 cd-docker-compose.yml 使用
+# 用法：复制到项目根 docker-compose.yml，改 service 名 + 镜像名 + ENV
+# =============================================================================
+
+version: '3.8'
+
+# =============================================================================
+# 使用方法:
+#   docker compose up -d
+#   docker compose logs -f <service>
+#   docker compose down
+#   docker compose down -v   # 清数据卷（慎用）
+#
+# 端口约定：
+#   backend  : 9280
+#   frontend : 80
+#   mysql    : 3306（可选）
+#   redis    : 6379（可选）
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 后端（Spring Boot，端口 9280）
+  # ---------------------------------------------------------------------------
+  YOUR_BACKEND_SERVICE:                         # ← 改 1（与 cd.yml 的 COMPOSE_SERVICES 一致）
+    image: ghcr.io/YOUR_OWNER/YOUR_PROJECT/backend:latest  # ← 改 2
+    container_name: YOUR_BACKEND_SERVICE
+    restart: unless-stopped
+    ports:
+      - "9280:9280"                              # ← 按需改端口
+    environment:
+      # Java 调优
+      JAVA_OPTS: "-Xms512m -Xmx1024m -XX:+UseG1GC"
+
+      # 数据库（用 .env 或直接填；推荐用 .env）
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: ${MYSQL_DB:-app_db}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PWD: ${REDIS_PWD:-}
+
+      # 应用级 ENV（按需加）
+      AI_ENABLED: ${AI_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - backend_data:/app/data                   # ← 按需挂载数据卷
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9280/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s                          # Spring Boot 启动慢，给足时间
+    networks:
+      - app-net
+
+  # ---------------------------------------------------------------------------
+  # 前端（Nginx + React 静态文件，端口 80）
+  # ---------------------------------------------------------------------------
+  YOUR_FRONTEND_SERVICE:                        # ← 改 3
+    image: ghcr.io/YOUR_OWNER/YOUR_PROJECT/frontend:latest  # ← 改 4
+    container_name: YOUR_FRONTEND_SERVICE
+    restart: unless-stopped
+    ports:
+      - "80:80"                                  # ← 按需改端口
+    depends_on:
+      - YOUR_BACKEND_SERVICE
+    networks:
+      - app-net
+
+  # ---------------------------------------------------------------------------
+  # MySQL（可选 - 如果已经有外部 DB，删掉这一段）
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.4
+    container_name: YOUR_PROJECT-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DB:-app_db}
+      MYSQL_USER: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"                              # 生产环境建议删掉这行（不暴露 DB 端口）
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 首次启动执行 init.sql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_PASSWORD:-changeme}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-net
+
+  # ---------------------------------------------------------------------------
+  # Redis（可选）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:8-alpine
+    container_name: YOUR_PROJECT-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"                              # 生产环境建议删掉
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app-net
+
+# =============================================================================
+# 网络 / 卷
+# =============================================================================
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_data:
+    driver: local

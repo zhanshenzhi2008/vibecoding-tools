@@ -1,0 +1,319 @@
+# =============================================================================
+# GitHub Actions CI 模板：Spring Boot + 前端项目
+# 适用：后端单元测试 + 前端单元测试 + 前端 E2E 测试
+# 数据库尽量保证和部署环境一致（MySQL 8.x / MongoDB 8.x / Redis 8.x）
+# 用法：复制到 .github/workflows/ci.yml，改顶部 env 块
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  # ── 后端配置 ──────────────────────────────────────────────────────────
+  BACKEND_DIR: agent-insight-server    # ← 改 1：后端代码目录
+  JAVA_VERSION: '21'                    # ← 改 2：JDK 版本
+  MAVEN_OPTS: -Xmx1024m                # Maven 内存限制
+  DB_ROOT_PASSWORD: rootpass           # ← 改 3：MySQL root 密码
+  DB_NAME: agent_insight               # ← 改 4：MySQL 数据库名
+
+  # ── 前端配置 ──────────────────────────────────────────────────────────
+  FRONTEND_DIR: agent-insight-web      # ← 改 5：前端代码目录
+  NODE_VERSION: '22'                   # ← 改 6：Node 版本
+
+  # ── 服务镜像版本（与部署环境保持一致）────────────────────────────────
+  MYSQL_IMAGE: mysql:8.4               # ← 改 7：MySQL 版本
+  MONGODB_IMAGE: mongo:8.3            # ← 改 8：MongoDB 版本
+  REDIS_IMAGE: redis:8.8.0-alpine     # ← 改 9：Redis 版本
+
+  # ── SQL / MongoDB 初始化脚本 ────────────────────────────────────────
+  SQL_INIT_SCRIPT: fixtures/mysql/init.sql          # ← 改 10：建表 SQL 路径（相对于仓库根）
+  MONGODB_INIT_SCRIPT: fixtures/mongodb/init.js      # ← 改 11：MongoDB 初始化脚本路径
+
+  # ── 前端 E2E 配置 ───────────────────────────────────────────────────
+  E2E_PORT: 3010                      # ← 改 12：E2E 测试 Vite dev server 端口（与 vite.config.ts 一致）
+  PLAYWRIGHT_BROWSERS: chromium        # ← 改 13：Playwright 浏览器（chromium / firefox / webkit）
+
+jobs:
+  # =========================================================================
+  # 后端单元测试（MySQL + MongoDB + Redis）
+  # =========================================================================
+  backend-test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: ${{ env.MYSQL_IMAGE }}
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ env.DB_NAME }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=60s
+
+      mongodb:
+        image: ${{ env.MONGODB_IMAGE }}
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=10s
+
+      redis:
+        image: ${{ env.REDIS_IMAGE }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+
+    defaults:
+      run:
+        working-directory: ${{ env.BACKEND_DIR }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Install MySQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }} --silent && echo "MySQL ready" && break
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+
+      - name: Install mongosh for MongoDB
+        run: |
+          MONGODB_VERSION=$(echo ${{ env.MONGODB_IMAGE }} | grep -oP 'mongo:\K[0-9]+\.[0-9]+')
+          curl -fsSL https://pgp.mongodb.com/server-${MONGODB_VERSION}.asc | gpg --yes --dearmor -o /usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/${MONGODB_VERSION} multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+
+      - name: Run SQL init script
+        if: env.SQL_INIT_SCRIPT != ''
+        run: |
+          if [ -f "../${{ env.SQL_INIT_SCRIPT }}" ]; then
+            mysql -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }} ${{ env.DB_NAME }} < "../${{ env.SQL_INIT_SCRIPT }}"
+          else
+            echo "SQL init script not found: ${{ env.SQL_INIT_SCRIPT }}, skipping..."
+          fi
+
+      - name: Initialize MongoDB metadata
+        if: env.MONGODB_INIT_SCRIPT != ''
+        run: |
+          if [ -f "../${{ env.MONGODB_INIT_SCRIPT }}" ]; then
+            mongosh mongodb://127.0.0.1:27017/${{ env.DB_NAME }} --quiet < "../${{ env.MONGODB_INIT_SCRIPT }}"
+          else
+            echo "MongoDB init script not found: ${{ env.MONGODB_INIT_SCRIPT }}, skipping..."
+          fi
+
+      - name: Run Maven tests
+        run: >-
+          mvn -q test
+          -Dspring.datasource.url=jdbc:mysql://127.0.0.1:3306/${{ env.DB_NAME }}
+          -Dspring.datasource.username=root
+          -Dspring.datasource.password=${{ env.DB_ROOT_PASSWORD }}
+          -Dspring.mongodb.uri=mongodb://127.0.0.1:27017/${{ env.DB_NAME }}
+          -Dspring.data.redis.host=127.0.0.1
+
+  # =========================================================================
+  # 前端单元测试
+  # =========================================================================
+  frontend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.FRONTEND_DIR }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('${{ env.FRONTEND_DIR }}/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      - name: Install dependencies with retry
+        run: |
+          for i in 1 2 3; do
+            npm ci --legacy-peer-deps --prefer-offline && break
+            echo "npm ci failed (attempt $i), retrying in 10s..."
+            sleep 10
+          done
+
+      - name: Run unit tests
+        run: npm test
+
+  # =========================================================================
+  # 前端 E2E 测试（需要后端服务运行）
+  # =========================================================================
+  frontend-e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: ${{ env.MYSQL_IMAGE }}
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ env.DB_NAME }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=60s
+
+      mongodb:
+        image: ${{ env.MONGODB_IMAGE }}
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=10s
+
+    defaults:
+      run:
+        working-directory: ${{ env.FRONTEND_DIR }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }} (for Spring Boot backend)
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Cache Maven packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('${{ env.FRONTEND_DIR }}/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      - name: Install MySQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Install mongosh for MongoDB
+        run: |
+          MONGODB_VERSION=$(echo ${{ env.MONGODB_IMAGE }} | grep -oP 'mongo:\K[0-9]+\.[0-9]+')
+          curl -fsSL https://pgp.mongodb.com/server-${MONGODB_VERSION}.asc | gpg --yes --dearmor -o /usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/${MONGODB_VERSION} multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in $(seq 1 45); do
+            mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }} --silent && echo "MySQL ready" && break
+            echo "Waiting for MySQL... ($i/45)"
+            sleep 2
+          done
+
+      - name: Run SQL init script
+        if: env.SQL_INIT_SCRIPT != ''
+        run: |
+          if [ -f "../${{ env.SQL_INIT_SCRIPT }}" ]; then
+            mysql -h 127.0.0.1 -uroot -p${{ env.DB_ROOT_PASSWORD }} ${{ env.DB_NAME }} < "../${{ env.SQL_INIT_SCRIPT }}"
+          fi
+
+      - name: Initialize MongoDB metadata
+        if: env.MONGODB_INIT_SCRIPT != ''
+        run: |
+          if [ -f "../${{ env.MONGODB_INIT_SCRIPT }}" ]; then
+            mongosh mongodb://127.0.0.1:27017/${{ env.DB_NAME }} --quiet < "../${{ env.MONGODB_INIT_SCRIPT }}"
+          fi
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do
+            npm ci --legacy-peer-deps --prefer-offline && break
+            echo "npm ci failed (attempt $i), retrying in 10s..."
+            sleep 10
+          done
+
+      - name: Ensure port ${{ env.E2E_PORT }} is free
+        run: |
+          if lsof -i :${{ env.E2E_PORT }} >/dev/null 2>&1; then
+            echo "Port ${{ env.E2E_PORT }} is in use, killing..."
+            kill -9 $(lsof -t -i :${{ env.E2E_PORT }}) || true
+            sleep 2
+          fi
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps ${{ env.PLAYWRIGHT_BROWSERS }}
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:${{ env.E2E_PORT }}
+          VITE_API_BASE_URL: /api
+          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/${{ env.DB_NAME }}
+          SPRING_DATASOURCE_USERNAME: root
+          SPRING_DATASOURCE_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
+          SPRING_MONGODB_URI: mongodb://127.0.0.1:27017/${{ env.DB_NAME }}

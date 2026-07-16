@@ -1,0 +1,88 @@
+# =============================================================================
+# GitHub Actions CD 模板 #3：纯前端静态站（rsync 到 nginx 服务器）
+# 适用：VitePress / Hugo / Next.js SSG / 纯 HTML
+# 用法：复制到 .github/workflows/cd-static.yml，改 nginx 路径
+# =============================================================================
+
+name: Deploy Static Site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'YOUR_FRONTEND_DIR/**'   # ← 按需改
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-static-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # 服务器上的静态文件目录
+  DEPLOY_PATH: /var/www/html                            # ← nginx 静态文件目录
+  FRONTEND_BUILD_DIR: ./YOUR_FRONTEND_DIR/dist          # ← 改 1（Vite: dist / Hugo: public / Next: out）
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: YOUR_FRONTEND_DIR/package-lock.json   # ← 改 2
+
+      - name: Install + build
+        working-directory: YOUR_FRONTEND_DIR   # ← 改 3
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify build output
+        run: ls -la ${{ env.FRONTEND_BUILD_DIR }}
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Rsync to nginx server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+          script: |
+            set -e
+            echo "=== Deploying static files ==="
+
+            # 1. 备份当前版本（按时间戳）
+            if [ -d "$DEPLOY_PATH" ] && [ "$(ls -A $DEPLOY_PATH 2>/dev/null)" ]; then
+              BACKUP_DIR="${DEPLOY_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+              sudo cp -r $DEPLOY_PATH $BACKUP_DIR
+              echo "Backup created: $BACKUP_DIR"
+            fi
+
+            # 2. 清空旧文件（不删目录本身）
+            sudo rm -rf $DEPLOY_PATH/*
+
+            # 3. 等下：rsync 在 GitHub Action 这边跑（更稳），不用传文件
+            #    见下一个 step：直接用 rsync-action 把 build 产物传过去
+
+            # 4. 重载 nginx（可选）
+            # sudo nginx -t && sudo systemctl reload nginx
+
+            echo "=== Deploy done ==="
+
+      - name: Rsync build to remote
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_SSH_PORT || '22' }} -o StrictHostKeyChecking=no" \
+            ${{ env.FRONTEND_BUILD_DIR }}/ \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/
