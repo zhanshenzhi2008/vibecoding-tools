@@ -526,7 +526,7 @@ docker exec db-postgres pg_dump -U postgres {{PROJECT_NAME}} \
 |------|--------|------|
 | `{{PROJECT_NAME}}` | `myapp` | 用户指定 |
 | `{{DOMAIN}}` | `myapp.example.com` | 用户指定 |
-| `{{SERVER_IP}}` | `1.2.3.4` | GitHub Secrets |
+| `{{SERVER_IP}}` | `your.server.ip` | GitHub Secrets |
 | `{{SSH_USER}}` | `deploy` | 用户指定 |
 | `{{SSH_PORT}}` | `22` | GitHub Secrets |
 | `{{DB_PASSWORD}}` | `xxx` | GitHub Secrets |
