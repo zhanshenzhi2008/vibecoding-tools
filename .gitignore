@@ -1,0 +1,22 @@
+# OS / 编辑器
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Cursor 内部生成
+.cursor.bak.*
+.cursor.bak
+
+# Python（MCP 服务缓存）
+.cursor/mcps/**/__pycache__/
+.cursor/mcps/**/*.pyc
+
+# 临时备份
+*.bak
+*.tmp
+
+# ⚠️ 重要：以下两个目录需要被 git 跟踪
+# - cursor/  是真实唯一源
+# - .cursor/ 是 vibecoding-tools 项目内的 symlink（git 仅跟踪 link 本身）

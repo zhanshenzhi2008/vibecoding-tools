@@ -1,0 +1,73 @@
+# =============================================================================
+# Traefik v3.x Portainer Stack（通用模板）
+#
+# 用法：Portainer → Stacks → Add → Web editor → 粘贴本文件 → Deploy
+#
+# 前置条件：
+#   1. 服务器 80/443 端口未被占用
+#   2. DNS 已解析 {{DOMAIN}} → 服务器 IP
+#   3. 已创建外部网络 {{APP_NETWORK}}：
+#      docker network inspect {{APP_NETWORK}} || docker network create {{APP_NETWORK}}
+#
+# 部署后必改项（Ctrl+F 搜索替换）：
+#   - your-email@example.com → 你的 Let's Encrypt 注册邮箱
+#   - user:$$apr1$$xyz$$abc   → htpasswd 生成的认证字符串
+#   - traefik.{{DOMAIN}}      → Traefik Dashboard 的访问域名
+# =============================================================================
+
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network={{APP_NETWORK}}"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+      # Let's Encrypt 证书
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email={{EMAIL}}"        # ← 改 1
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      # API & Dashboard（仅本机访问，建议用 SSH tunnel 而非公网暴露）
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+      - traefik-logs:/var/log/traefik
+    networks:
+      - {{APP_NETWORK}}
+    labels:
+      # Traefik Dashboard（按需开启）
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.{{DOMAIN}}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-auth"
+      # Basic Auth（用 htpasswd -nb user password 生成，$ 需双写为 $$）
+      - "traefik.http.middlewares.traefik-auth.basicauth.users={{TRAEFIK_AUTH}}"  # ← 改 2
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  {{APP_NETWORK}}:
+    external: true
+    name: {{APP_NETWORK}}
+
+volumes:
+  traefik-letsencrypt:
+  traefik-logs:
