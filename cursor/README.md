@@ -4,6 +4,8 @@
 > 仓库根目录的 `.cursor/` 是 `cursor/` 的 symlink，全局 `~/.cursor/skills/` 也是它的 symlink。
 > **任何位置修改 = 修改同一个物理目录**，永远不用担心漂移。
 
+📖 团队协作流程？见 [`REVIEW.md`](./REVIEW.md) — 三层防线：本地自查 + CI 扫描 + CODEOWNERS 强制 review。
+
 ---
 
 ## 📐 目录结构
@@ -264,8 +266,16 @@ ln -sfn ~/Documents/mine-repository/vibecoding-tools/cursor/skills \
 git status
 git add cursor/        # 永远只 add cursor/
 git commit -m "feat(skills): 新增 XXX skill"
-git push
+
+# === 推送走 PR 流程 ===
+git push -u origin HEAD
+gh pr create --title "feat(skill): 新增 XXX" \
+             --body "$(cat .github/PULL_REQUEST_TEMPLATE.md)"
+gh pr checks           # 看 CI 扫描结果
+gh pr merge --squash   # owner review 通过后 merge
 ```
+
+> 📖 完整 review 流程见 [`REVIEW.md`](./REVIEW.md)。
 
 新机器 clone 后会自动获得 `.cursor` symlink，无需手动重建。
 
