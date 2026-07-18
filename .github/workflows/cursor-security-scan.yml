@@ -1,0 +1,33 @@
+# Cursor 配置安全审核（GitHub Actions）
+
+每次对 `cursor/` 的修改都会自动跑以下检查，失败则阻断合并。
+
+## 检查项
+
+- 真实 IP / 域名（白名单除外）
+- 真实邮箱（占位符除外）
+- OpenAI / Anthropic API Key
+- GitHub Token
+- SSH 私钥 / PEM 头
+- 密码 / secret 字面量赋值
+
+## 使用
+
+进入仓库 Settings → Branches → Add rule：
+
+| 字段 | 值 |
+|------|-----|
+| Branch name pattern | `master` |
+| Require status checks | ✅ |
+| 选择此 workflow | `Cursor Security Scan` |
+
+这样 PR 在合并前必须通过扫描。
+
+## 本地跑
+
+```bash
+# 在项目根目录
+bash .github/scripts/check-cursor-secrets.sh
+```
+
+（开发中，等价于 CI 步骤）

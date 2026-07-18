@@ -1,0 +1,12 @@
+# Default owners for everything
+*   @zhanshenzhi2008
+
+# Cursor 配置（rules/skills/mcps）— 必须 owner review
+/cursor/   @zhanshenzhi2008
+/.cursor    @zhanshenzhi2008
+/.gitignore @zhanshenzhi2008
+README.md   @zhanshenzhi2008
+LICENSE     @zhanshenzhi2008
+
+# 索引类规则（影响全局行为）— 双重 review 关键
+/cursor/rules/agent_rules_index.mdc   @zhanshenzhi2008
