@@ -17,7 +17,8 @@
 
 services:
   traefik:
-    image: traefik:v3.1
+    # Docker Engine 29 要求 Traefik ≥ v3.6.1（Docker API 协商）
+    image: traefik:v3.6.1
     container_name: traefik
     restart: unless-stopped
     command:

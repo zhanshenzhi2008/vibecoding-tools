@@ -1,6 +1,6 @@
 ---
 name: github-cicd-template
-description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + React/Vue/Angular + Docker + 远程服务器部署场景。当用户需要"建 CI/CD"、"配 GitHub Actions 部署"、"自动部署到服务器"、"写 docker-compose + workflow" 时使用本 skill。
+description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + React/Vue/Angular + Docker + 远程服务器部署场景。当用户需要"建 CI/CD"、"配 GitHub Actions 部署"、"自动部署到服务器"、"写 docker-compose + workflow"，或排查静态前端把 localhost 打进镜像、公网请求 localhost:8080 时使用本 skill。
 ---
 
 # GitHub Actions CI/CD 模板生成器
@@ -15,7 +15,7 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 | 用户说 | 用本 skill |
 |--------|-----------|
 | "帮我建 GitHub Actions 部署" | ✅ |
-| "配一下 CI/CD，push 到 main 自动部署" | ✅ |
+| "配一下 CI/CD，push 到 master/main 自动部署" | ✅ |
 | "我想 push 后自动 build docker 镜像" | ✅ |
 | "服务器是阿里云 / 自建机，怎么自动部署" | ✅ |
 | "我想跑 GitHub Actions 自动发布" | ✅ |
@@ -56,7 +56,7 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 | SSH 用户 | `DEPLOY_USER` | **是** | 推荐非 root（deploy） |
 | SSH 端口 | `DEPLOY_SSH_PORT` | 否（默认 22） | 自定义 SSH 端口时填 |
 | SSH 私钥 | `DEPLOY_SSH_KEY` | **是** | `ssh-keygen -t ed25519` 生成 |
-| Registry token | `IMAGE_REGISTRY_TOKEN` | **是** | PAT with `write:packages` 权限 |
+| Registry token | `IMAGE_REGISTRY_TOKEN` | 否（兜底） | PAT with `write:packages` 权限（默认优先用 `GITHUB_TOKEN`） |
 
 ---
 
@@ -70,7 +70,7 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 | `assets/ci-cd-k8s-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-k8s.yml` | build 镜像 → `kubectl set image`。有 K8s 集群时用 |
 | `assets/ci-cd-static-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-static.yml` | build 前端 → rsync 到 nginx。纯前端静态站用 |
 
-> **CI 和 CD 必须分开**，不要把 test 塞进 CD workflow 里。分开的好处：PR 阶段只跑 test（快，不触发构建），main 阶段才 build + 部署；状态页上 CI 和 CD 的通过/失败独立显示，不会互相干扰。
+> **CI 和 CD 必须分开**，不要把 test 塞进 CD workflow 里。分开的好处：PR 阶段只跑 test（快，不触发构建），主分支阶段（`master`/`main`）才 build + 部署；状态页上 CI 和 CD 的通过/失败独立显示，不会互相干扰。
 
 ---
 
@@ -91,7 +91,7 @@ Spring Boot + React/Vue + 一台服务器？
   └─→ ci-cd-static-template.yml
 ```
 
-### 第 2 步：准备 5 个 GitHub Secret
+### 第 2 步：准备 4 个 GitHub Secret（默认方案）
 
 进仓库 → Settings → Secrets and variables → Actions → New repository secret：
 
@@ -101,8 +101,6 @@ Spring Boot + React/Vue + 一台服务器？
 | `DEPLOY_USER` | SSH 用户名（推荐非 root） | 服务器新建 `deploy` 用户 |
 | `DEPLOY_SSH_PORT` | SSH 端口（默认 22，可选） | 服务端 sshd 配置 |
 | `DEPLOY_SSH_KEY` | 私钥全文 | `ssh-keygen -t ed25519 -C "github-deploy"` |
-| `DEPLOY_PATH` | 服务器项目根目录 | `/opt/docker/<project>` 这种 |
-| `IMAGE_REGISTRY_TOKEN` | PAT with `write:packages` | GitHub Settings → Developer settings → PAT |
 
 **或者用 `gh` CLI 一把梭**：
 
@@ -111,8 +109,12 @@ gh secret set DEPLOY_HOST          --body "156.226.176.141"     --env production
 gh secret set DEPLOY_USER          --body "deploy"              --env production
 gh secret set DEPLOY_SSH_PORT      --body "22000"               --env production
 gh secret set DEPLOY_SSH_KEY       < ~/.ssh/github_actions      --env production
-gh secret set DEPLOY_PATH          --body "/opt/docker/<project>" --env production
-gh secret set IMAGE_REGISTRY_TOKEN --body "ghp_xxxxxxxxxxxx"     --env production
+```
+
+PAT 兜底（仅当组织权限策略导致 `GITHUB_TOKEN` 拉取 GHCR 失败时）：
+
+```bash
+gh secret set IMAGE_REGISTRY_TOKEN --body "ghp_xxxxxxxxxxxx" --env production
 ```
 
 > **env vs secret 区分原则**：
@@ -267,6 +269,7 @@ env:
   DEPLOY_PATH: /opt/project/my-app                             # ← 改 3：服务器上的项目根目录
   COMPOSE_FILE: docker-compose.yml                             # 留默认即可
   COMPOSE_SERVICES: my-app-backend my-app-frontend           # ← 改 4：compose.yml 里的服务名
+  DEPLOY_PRIMARY_BRANCH: master                                # ← 可选：主部署分支（master/main）
 ```
 
 > 同时把 `assets/compose-stack-template.yml` 放到服务器的对应路径（即上面 `COMPOSE_FILE` 指向的位置），改 service 名/镜像名。
@@ -281,7 +284,94 @@ git commit -m "ci: add CI/CD workflows"
 git push
 ```
 
-> **CI 和 CD 分开两个文件**，PR 阶段跑 `ci.yml`（只 test，不部署），main 合并后才触发 `cd.yml`（build + 部署）。
+> **CI 和 CD 分开两个文件**，PR 阶段跑 `ci.yml`（只 test，不部署），主分支（`master` 或 `main`）合并后才触发 `cd.yml`（build + 部署）。
+
+### 第 5.1 步：Compose 不混淆（必须统一）
+
+推荐固定为“1 主文件 + 1 本地覆盖”：
+
+- `docker-compose.yml`：远程/CD 用（只拉镜像，不在服务器 build）
+- `docker-compose.local.yml`：本地开发覆盖（补 `build`，仅本地 `--build` 时叠加）
+
+命令对照：
+
+```bash
+# 远程服务器 / CD 脚本（默认）
+docker compose --env-file .env -f docker-compose.yml pull
+docker compose --env-file .env -f docker-compose.yml up -d
+
+# 本地开发（需要本地构建时）
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+
+`cd.yml` 建议固定：
+
+```yaml
+env:
+  COMPOSE_FILE: docker-compose.yml
+```
+
+### 第 5.2 步：DOCKER_TAG 文件约定（可选）
+
+当项目用 `image: ...:${DOCKER_TAG:-latest}` 时，推荐：
+
+- 运行时生效文件：`.env`（部署机）
+- 历史模板文件：`env-docker-tag.example`（仓库）
+
+维护规则：
+
+- `.env` 里只保留 1 行生效 `DOCKER_TAG=...`
+- 新版本可按 `env-YYYYMMDD` 或 `env-YYYYMMDD-vN`
+- 历史示例放 `env-docker-tag.example`，不要把多行生效值写进 `.env`
+
+### 第 6 步：主分支优先级与变量校验（强烈建议）
+
+```yaml
+on:
+  push:
+    branches: [master, main]
+
+env:
+  DEPLOY_PRIMARY_BRANCH: ${{ vars.DEPLOY_PRIMARY_BRANCH }}
+
+jobs:
+  deploy:
+    steps:
+      - name: Resolve primary deploy branch
+        id: branch_gate
+        run: |
+          set -e
+          configured_branch="${{ env.DEPLOY_PRIMARY_BRANCH }}"
+          if [ -n "${configured_branch}" ]; then
+            if [ "${configured_branch}" != "master" ] && [ "${configured_branch}" != "main" ]; then
+              echo "::error::DEPLOY_PRIMARY_BRANCH must be 'master' or 'main'"
+              exit 1
+            fi
+            preferred_branch="${configured_branch}"
+          elif git ls-remote --exit-code origin refs/heads/master >/dev/null 2>&1; then
+            preferred_branch="master"
+          else
+            preferred_branch="main"
+          fi
+          [ "${GITHUB_REF_NAME}" = "${preferred_branch}" ] \
+            && echo "should_deploy=true" >> "$GITHUB_OUTPUT" \
+            || echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+```
+
+### 第 7 步：GHCR 登录优先用 `GITHUB_TOKEN`
+
+```yaml
+permissions:
+  contents: read
+  packages: write
+
+steps:
+  - uses: docker/login-action@v3
+    with:
+      registry: ghcr.io
+      username: ${{ github.actor }}
+      password: ${{ github.token }}
+```
 
 ---
 
@@ -307,7 +397,7 @@ git push
 **核心流程**：
 
 ```
-git push main
+git push master   # 若仓库主分支是 main，则改成 git push main
   ↓
 Job 1: build (Ubuntu runner)
   ├── checkout
@@ -416,9 +506,19 @@ if: github.event.inputs.service == 'all' || github.event.inputs.service == '' ||
 
 **解法**：`cache-from: type=gha` + `cache-to: type=gha,mode=max`，第一次 build 慢，第二次起飞
 
-### ❌ 坑 7：镜像体积太大（>2GB）
+### ❌ 坑 8：静态前端把 localhost 打进镜像 → 公网登录打到访客电脑
 
-**解法**：用 multi-stage build，前端 `nginx:alpine`，后端 `eclipse-temurin:21-jre-alpine`
+**症状**：生产站 `POST http://localhost:8080/api/...` / `ERR_CONNECTION_REFUSED`；本机开后端「又好了」。
+
+**根因**：Nginx/静态托管没有运行时配置。`fetch('http://localhost:8080')` 在浏览器执行，localhost = 访客本机。compose 里的 `NUXT_PUBLIC_*` / `VITE_*` **改不了**已构建的 JS。
+
+**解法**：
+
+- Docker build-arg 写入 API 基址；方案 A（同源 Nginx 反代）生产 **`API_BASE` 为空**，不要 `/api`（路径已含 `/api/v1`）
+- 本地 dev 才用 `http://localhost:8080`
+- 业务代码禁止写死 localhost；修复后必须重建并部署前端镜像
+
+Cogniforge 细节见 `~/.cursor/skills/deploy/references/cogniforge.md`。
 
 ---
 
@@ -498,7 +598,13 @@ ArgoCD / Flux（GitOps）
 | `DEPLOY_USER` | **是** | SSH 用户 |
 | `DEPLOY_SSH_KEY` | **是** | SSH 私钥全文（含 BEGIN/END 行） |
 | `DEPLOY_SSH_PORT` | 否 | SSH 端口，默认 22 |
-| `IMAGE_REGISTRY_TOKEN` | **是** | PAT with `write:packages` 权限 |
+| `IMAGE_REGISTRY_TOKEN` | 否 | PAT 兜底（仅 `GITHUB_TOKEN` 权限受限时使用） |
+
+### variables（配在 GitHub Repository Variables）
+
+| 变量 | 必填 | 默认 | 说明 |
+|------|------|------|------|
+| `DEPLOY_PRIMARY_BRANCH` | 否 | 自动判定：有 `master` 用 `master`，否则 `main` | 显式指定主部署分支，仅允许 `master` / `main` |
 
 ---
 
@@ -509,7 +615,7 @@ ArgoCD / Flux（GitOps）
 | `concurrency` | 顶部 | 防止并发部署 |
 | `environment: production` | job 级 | 需要人工审批 |
 | `workflow_dispatch` | trigger | 手动触发 + 选择 service |
-| `if: github.ref == 'refs/heads/main'` | job 级 | 只 main 触发部署 |
+| `branch gate (master/main)` | step 级 | `master` 优先，支持 `DEPLOY_PRIMARY_BRANCH` 覆盖 |
 | `needs: build` | job 级 | 串行依赖 |
 | `cache-from: type=gha` | docker build | 利用 GitHub Actions cache |
 | `tags: ${{ github.sha }} + :latest` | docker build | 不可变 + 可变双 tag |
