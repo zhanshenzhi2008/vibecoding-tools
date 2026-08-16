@@ -47,7 +47,7 @@ jobs:
     environment: production      # ← 配 environment 要求人工审批（可选）
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -110,8 +110,25 @@ jobs:
           shasum -a 256 ~/.ssh/deploy_key | awk '{print "sha256: " $1}'
           ssh-keygen -l -f ~/.ssh/deploy_key | awk '{print "fingerprint: " $2 " (" $1 ")"}'
 
+      - name: Skip copying compose files
+        run: |
+          echo "不拷贝 compose 文件到远程机器。"
+          echo "服务器已自行维护 docker-compose.yml，CD 只登录仓库并拉镜像启动，避免覆盖远程配置。"
+
+      # 默认不向远程拷贝 compose，避免误覆盖服务器本地配置。需要时再解开下面步骤。
+      # - name: Sync compose files to server
+      #   uses: appleboy/scp-action@v1.0.0
+      #   with:
+      #     host: ${{ secrets.DEPLOY_HOST }}
+      #     username: ${{ secrets.DEPLOY_USER }}
+      #     key: ${{ secrets.DEPLOY_SSH_KEY }}
+      #     port: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+      #     source: docker-compose.yml
+      #     target: ${{ env.DEPLOY_PATH }}
+      #     overwrite: true
+
       - name: Deploy to remote server via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -120,11 +137,12 @@ jobs:
           script: |
             set -e
             echo "=== SSH OK $(whoami)@$(hostname) ==="
+            echo "不拷贝 compose 文件到远程机器，使用服务器本地 ${{ env.COMPOSE_FILE }}"
 
-            # 1. 登录镜像仓库
-            docker login ${{ env.IMAGE_REGISTRY }} -u "${{ github.actor }}" --password-stdin <<< "${{ secrets.IMAGE_REGISTRY_TOKEN }}"
+            # 1. 登录镜像仓库（默认 GITHUB_TOKEN；组织策略限制时改用 IMAGE_REGISTRY_TOKEN）
+            printf '%s\n' "${{ github.token }}" | docker login ${{ env.IMAGE_REGISTRY }} -u "${{ github.actor }}" --password-stdin
 
-            # 2. 拉新镜像
+            # 2. 拉新镜像（只拉，不覆盖 compose / .env）
             cd ${{ env.DEPLOY_PATH }}
             docker compose -f ${{ env.COMPOSE_FILE }} pull ${{ env.COMPOSE_SERVICES }}
 

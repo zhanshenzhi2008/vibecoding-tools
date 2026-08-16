@@ -37,6 +37,27 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 
 每层用 **environment variable + secret** 表达，**不**在 yaml 里写死：
 
+**硬规则：CD 默认不向远程拷贝 compose / `.env`**
+
+- 远程机器只拉镜像并启动：`docker login` → `docker compose pull` → `docker compose up -d`
+- `docker-compose.yml` 和 `.env` 由服务器本地维护（运维首次手工放好）
+- **禁止**默认用 SCP/rsync 覆盖远程 compose，避免把仓库改动误配到生产
+- Demo CD（`assets/ci-cd-workflow-template.yml`）必须：部署前 `echo` 说明不拷贝；SCP 步骤整段**注释保留**，需要时再解开
+- 静态站模板的 `rsync` 是前端产物，不是 compose，不受这条约束
+
+**硬规则：前端 Node 默认 22（GitHub 推荐）**
+
+- CI：`NODE_VERSION: '22'`（`assets/ci-template.yml` / `assets/ci-cd-static-template.yml` 已写死 22）
+- 前端 Dockerfile：`FROM node:22-alpine`，**禁止**从旧项目抄 `node:20-alpine` / `NODE_VERSION: '20'`
+- `package.json` → `engines` 可以继续写 `node >=20`、`pnpm >=8`（22/9 本来就满足，不必为了对齐去改）
+- 本机可以用 22 或更新的 LTS（如 24）；CI 和镜像必须是 22，不要各写各的
+
+**硬规则：Action 本体不要用 `@v4`（Node 20 运行时已弃用）**
+
+- 这和 `NODE_VERSION: '22'` **不是一回事**。`NODE_VERSION` 是项目构建用的 Node；`checkout@v4` 是 GitHub 跑这个工具自己的 Node
+- 警告 `Node.js 20 is deprecated... actions/checkout@v4` 就是这个，升 major 即可
+- 默认：`actions/checkout@v6`、`actions/setup-node@v6`、`actions/cache@v5`、`pnpm/action-setup@v6`
+
 **env（公开配置，写在 workflow 顶部）**
 
 | 维度 | 变量 | 默认值 | 说明 |
@@ -65,7 +86,7 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 | 文件 | 是什么 | 放哪里 | 用途 |
 |------|--------|--------|------|
 | `assets/ci-template.yml` | **GitHub Actions workflow**（CI 流程，测试验证） | 本地 → `.github/workflows/ci.yml` | **必选**：后端单元测试 + 前端单元测试 + 前端 E2E 测试。**CI 和 CD 必须分开**，职责单一、状态清晰 |
-| `assets/ci-cd-workflow-template.yml` | **GitHub Actions workflow**（CD 流程，部署上线） | 本地 → `.github/workflows/cd.yml` | **推荐**：build 镜像 → SSH 拉镜像 → `docker compose up`。90% 项目首选 |
+| `assets/ci-cd-workflow-template.yml` | **GitHub Actions workflow**（CD 流程，部署上线） | 本地 → `.github/workflows/cd.yml` | **推荐**：build 镜像 → SSH **只拉镜像** → `docker compose up`。默认不拷贝 compose。90% 项目首选 |
 | `assets/compose-stack-template.yml` | **服务编排定义**（docker compose 文件） | 服务器 → `/opt/project/<repo>/docker-compose.yml` | 给 CD 模板配套（健康检查 / depends_on / 卷挂载） |
 | `assets/ci-cd-k8s-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-k8s.yml` | build 镜像 → `kubectl set image`。有 K8s 集群时用 |
 | `assets/ci-cd-static-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-static.yml` | build 前端 → rsync 到 nginx。纯前端静态站用 |
@@ -272,7 +293,7 @@ env:
   DEPLOY_PRIMARY_BRANCH: master                                # ← 可选：主部署分支（master/main）
 ```
 
-> 同时把 `assets/compose-stack-template.yml` 放到服务器的对应路径（即上面 `COMPOSE_FILE` 指向的位置），改 service 名/镜像名。
+> 同时把 `assets/compose-stack-template.yml` **手工**放到服务器的对应路径（即上面 `COMPOSE_FILE` 指向的位置），改 service 名/镜像名。CD **不会**自动拷贝这份文件。
 
 ### 第 5 步：放到 `.github/workflows/`
 
@@ -310,6 +331,8 @@ docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml
 env:
   COMPOSE_FILE: docker-compose.yml
 ```
+
+CD 远程脚本只 `pull` + `up`，**不要** SCP 覆盖服务器上的 `docker-compose.yml` / `.env`。Demo CD 里 SCP 步骤注释保留，部署时 echo「不拷贝 compose 文件到远程机器」。
 
 ### 第 5.2 步：DOCKER_TAG 文件约定（可选）
 
@@ -408,11 +431,14 @@ Job 1: build (Ubuntu runner)
   ↓
 Job 2: deploy (Ubuntu runner, depends_on: build)
   ├── SSH 私钥 fingerprint 校验（防呆）
+  ├── echo：不拷贝 compose 到远程（SCP 步骤注释保留）
   ├── ssh 到服务器
   ├── docker login ghcr.io
   ├── docker compose pull  <services>
   └── docker compose up -d <services>
 ```
+
+> **不要**在 Job 2 默认 SCP `docker-compose.yml`。compose 已在服务器，CD 只拉镜像。SCP 步骤在 demo CD 里注释保留，解开前必须确认不会覆盖远程本地配置。
 
 **怎么用**：
 
@@ -479,6 +505,16 @@ echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
 **解法**：
 1. PAT 必须勾 `write:packages` 权限
 2. 或者在 GitHub 仓库 Settings → Packages → 设为 public
+
+### ❌ 坑 2.1：CD 把 compose 拷到服务器 → 覆盖远程配置 / Permission denied
+
+**症状**：
+- 远程 `.env` / Traefik labels / 端口被仓库版本覆盖
+- 或 `tar: docker-compose.yml: Cannot open: Permission denied`
+
+**根因**：用 SCP 覆盖服务器已维护的 compose。远程目录往往只有运维可写，CD SSH 用户也不该改编排文件。
+
+**解法**：Demo CD 默认 **不拷贝** compose。部署 step 先 echo 说明；SCP 整段注释保留。compose 由运维首次放到 `DEPLOY_PATH`。若 `go-yaml load error ... L10.C3`，在**服务器本地**修 Tab/非法字符，不要靠 CD 覆盖。
 
 ### ❌ 坑 3：服务启动后立即被 kill
 
@@ -619,6 +655,7 @@ ArgoCD / Flux（GitOps）
 | `needs: build` | job 级 | 串行依赖 |
 | `cache-from: type=gha` | docker build | 利用 GitHub Actions cache |
 | `tags: ${{ github.sha }} + :latest` | docker build | 不可变 + 可变双 tag |
-| `appleboy/ssh-action@v1` | deploy | 稳定的 SSH action |
+| `appleboy/ssh-action@v1.2.5` | deploy | 稳定的 SSH action（Node 24 兼容） |
 | `docker login ... --password-stdin` | deploy | 不暴露 token 到日志 |
-| `docker compose pull + up -d` | deploy | 滚动升级 |
+| `echo 不拷贝 compose` + 注释保留 SCP | deploy | 避免覆盖服务器本地 compose / `.env` |
+| `docker compose pull + up -d` | deploy | 滚动升级（只拉镜像，不传编排文件） |

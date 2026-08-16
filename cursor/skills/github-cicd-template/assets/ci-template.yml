@@ -23,7 +23,7 @@ env:
 
   # ── 前端配置 ──────────────────────────────────────────────────────────
   FRONTEND_DIR: agent-insight-web      # ← 改 5：前端代码目录
-  NODE_VERSION: '22'                   # ← 改 6：Node 版本
+  NODE_VERSION: '22'                   # ← 改 6：Node 版本（GitHub 推荐 22，禁止抄旧项目的 20）
 
   # ── 服务镜像版本（与部署环境保持一致）────────────────────────────────
   MYSQL_IMAGE: mysql:8.4               # ← 改 7：MySQL 版本
@@ -86,7 +86,7 @@ jobs:
         working-directory: ${{ env.BACKEND_DIR }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v5
@@ -160,10 +160,10 @@ jobs:
         working-directory: ${{ env.FRONTEND_DIR }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -224,7 +224,7 @@ jobs:
         working-directory: ${{ env.FRONTEND_DIR }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up JDK ${{ env.JAVA_VERSION }} (for Spring Boot backend)
         uses: actions/setup-java@v5
@@ -234,7 +234,7 @@ jobs:
           cache: 'maven'
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'

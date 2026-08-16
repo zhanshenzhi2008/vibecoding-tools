@@ -2,6 +2,8 @@
 # 生产级 docker-compose 模板
 # 配套 cd-docker-compose.yml 使用
 # 用法：复制到项目根 docker-compose.yml，改 service 名 + 镜像名 + ENV
+# 本文件放在服务器 DEPLOY_PATH，由运维首次手工放置并维护。
+# CD 默认不拷贝、不覆盖此文件（只 docker compose pull + up）。
 # =============================================================================
 
 version: '3.8'

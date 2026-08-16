@@ -32,7 +32,7 @@ env:
 
   # 前端
   FRONTEND_DIR: agent-insight-web
-  NODE_VERSION: '22'
+  NODE_VERSION: '22'   # GitHub 推荐；禁止从旧项目抄 20
 
   # 服务镜像版本（与部署环境一致）
   MYSQL_IMAGE: mysql:8.4
@@ -62,6 +62,8 @@ env:
 ## CD 模板：env + secrets
 
 复制 `assets/ci-cd-workflow-template.yml` → `.github/workflows/cd.yml`，改 env + 配 secrets。
+
+**CD 默认不拷贝 compose**：服务器自己维护 `docker-compose.yml` 和 `.env`。Demo CD 会 echo「不拷贝 compose 文件到远程机器」，SCP 步骤注释保留。远程只做 `docker login` → `pull` → `up`。
 
 ### CD env（写在 workflow 顶部）
 
@@ -138,3 +140,4 @@ jobs:
 | 服务启动后立即被 kill | compose 加 `start_period: 60s` |
 | `inputs.service` 为 null | 加 `|| == ''` 兜底 |
 | 构建慢 / 镜像大 | `cache-from: type=gha` + multi-stage + alpine |
+| CD 覆盖了服务器 compose / SCP Permission denied | 不要解开 SCP；compose 由服务器本地维护，CD 只拉镜像 |

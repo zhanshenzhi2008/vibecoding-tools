@@ -27,11 +27,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22'          # GitHub 推荐 22，禁止抄旧项目的 20
           cache: 'npm'
           cache-dependency-path: YOUR_FRONTEND_DIR/package-lock.json   # ← 改 2
 

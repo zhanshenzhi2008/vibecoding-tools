@@ -29,7 +29,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -56,7 +56,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: production
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       # 配置 kubectl（k8s cluster 的 kubeconfig 必须放 secret）
       - name: Configure kubectl
