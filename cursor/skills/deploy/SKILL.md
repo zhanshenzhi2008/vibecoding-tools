@@ -1,22 +1,23 @@
 description: |
   通用 Docker + Traefik + Portainer 部署技能。覆盖单主机 Docker 部署到生产环境的全流程。
-  含 agent-insight（仓库 docker-traefik/）专项约定：见 references/agent-insight.md。
 
   适用场景（触发词）：
   - "部署"、"上线"、"deploy"、"ship"
   - "怎么配 Traefik"、"Traefik 路由"
   - "Portainer 导入"、"docker compose 启动"
+  - "Portainer Restricted"、"accesscontrol.users"、"重建后看不到容器"
   - "Let's Encrypt 证书"、"HTTPS 配置"
   - "新服务器初始化"、"首次部署"
   - "502 / 404 / CORS 排查"
   - "healthcheck"、"健康检查"、"unhealthy"、"BusyBox wget"
   - "前端 /health 还是 actuator"、"Nginx health"
-  - "agent-insight 部署"、"docker-traefik"
-  - "cogniforge 部署"、"PGSQL"、"镜像内置 configs"
+  - "docker-traefik"
+  - "PGSQL"、"镜像内置 configs"
   - "localhost:8080"、"公网打到本地"、"API_BASE"、"NUXT_PUBLIC_API_BASE"
+  - "Redis 键"、"{{PROJECT_NAME}}:modelcfg"、"db0 前缀隔离"
 
   模板变量说明（部署时替换）：
-  - {{PROJECT_NAME}}  项目名，如 "myapp" / "agent-insight"
+  - {{PROJECT_NAME}}  项目名，如 "ai-job-hunter"
   - {{DOMAIN}}        完整访问域名，如 "insight.example.com"
   - {{BASE_DOMAIN}}   基础域名（无子前缀），如 "example.com"；Portainer 拼 portainer.${BASE_DOMAIN}
   - {{SERVER_IP}}     服务器 IP
@@ -118,7 +119,7 @@ grep -rE "BEGIN .* PRIVATE KEY" .
               │ db-net   │          │ db-net   │
               └──────────┘          └──────────┘
 
-共享网络：{{APP_NETWORK}}（应用层；**agent-insight / Cogniforge 生产约定名是 `proxy`**）
+共享网络：{{APP_NETWORK}}（应用层；**本人云端部署生产约定名是 `proxy`**）
 公用网络：{{DB_NETWORK}}（数据层，默认名 `db-net`）
 公用基础设施：/opt/databases/（所有项目共用）
 边缘入口：/opt/docker/（Traefik + Portainer）
@@ -148,111 +149,64 @@ grep -rE "BEGIN .* PRIVATE KEY" .
 /opt/docker/                   # 基础设施（Traefik + Portainer）
 ```
 
-### 多仓单部署根目录（推荐：微服务 / 多端产品）
+### 单仓单部署目录（本人云端部署：推荐）
 
-适用场景：一个产品拆成多个仓（前端 / 后端 / AI），但生产环境**只用一个部署根目录**集中所有 compose 文件。
+适用场景：单项目、单仓，生产机只拉镜像不跑 git。基础架构（Traefik/Portainer/DB/Redis）已统一配置稳定，不需要拆分共享。
 
 ```
-/opt/project/                                       # ← 部署根
-├── cogniforge/                                     # ← 品牌根 = 部署根（同名）
-│   ├── docker-compose.yml                          #   后端 compose（来自 cogniforge 仓）
-│   ├── docker-compose-ai.yml                       #   AI compose（来自 cogniforge-ai 仓）
-│   ├── docker-compose-web.yml                      #   前端 compose（来自 cogniforge-web 仓）
-│   ├── .env                                        #   后端私有配置（含主要业务密钥）
-│   ├── .env.ai                                     #   AI 私有配置（覆盖公共 envs/llm.env 的部分项）
-│   # ── 注意：前端 API 基址是镜像构建时写入的（Dockerfile ARG API_BASE，生产为空=同源）。
-│   #    compose 只需要 DOMAIN（Traefik Host）。不要用 NUXT_PUBLIC_API_BASE 运行时覆盖。
-│   #    详见 references/cogniforge.md
-└── envs/                                           # ← 公共配置（部署根的同级目录）
-    ├── db.env                                      #   PostgreSQL + Redis 连接（grep 提取自主仓 .env.example）
-    └── llm.env                                     #   LLM Provider keys（grep 提取自主仓 .env.example）
+/opt/project/ai-job-hunter/          # 部署根目录
+├── .env                             # 所有配置（DB + App + Traefik）
+├── docker-compose.yml               # 生产编排
+└── .env.example                     # 配置模板（git 管理）
 ```
+
+**env_file 引用约定（单 .env）**：
+
+```yaml
+services:
+  ai-job-hunter:
+    env_file:
+      - .env
+```
+
+**${VAR:-default} vs ${VAR:?error msg}**：
+
+- `${VAR:-default}` → 变量未设时用默认值（适合可选项）
+- `${VAR:?error msg}` → 变量未设时**启动报错并退出**（适合必填项如 `DOMAIN`）
+
+**为什么这样设计**：
+- ✅ `.env` 直接在项目目录，一目了然
+- ✅ 本人云端部署：基础架构配置稳定，不需要拆分共享
+- ✅ 服务器只拉已签名镜像，安全攻击面小
+- ✅ CI 只 SSH 登录 `pull` + `up`，不拷贝 compose（避免覆盖远程配置）
 
 **核心约定：服务器只负责拉镜像，不跑 git**
 
 | 角色 | 做什么 |
 |------|--------|
 | **CI（GitHub Actions）** | 跑测试 → build 镜像 → push 到 ghcr |
-| **服务器** | **只 `docker compose pull`**（镜像）+ `up -d`，不 `git clone`、不 `git pull` |
-| **运维** | 首次部署手工把每个仓的 compose 文件**汇总到** `/opt/project/cogniforge/` |
+| **服务器** | **只 `docker compose pull`**（镜像）+ `up -d`，不 `git clone`、不 `git pull`、**不接收 CD 拷贝的 compose** |
 
-**为什么这样设计**：
-- ✅ 服务器只拉已签名镜像，安全攻击面小（不执行任意 git 内容）
-- ✅ 所有服务的 compose、env、网络拓扑集中在**一个目录**，运维一目了然
-- ✅ 一次 `cd /opt/project/cogniforge` 就能操作所有服务（pull / up / logs / ps）
-- ✅ 跨服务共享配置（DB、AI keys）通过 `../envs/*.env` 引用，不进 git
-- ✅ 镜像版本可追溯（每个 tag 对应一个 git commit）
-
-**关键共享机制**：
-
-| 共享机制 | 内容 | 谁能用 |
-|---------|------|--------|
-| `db-net` docker 网络 | PostgreSQL/Redis 容器名寻址 | 所有 join `db-net` 的服务 |
-| `../envs/db.env`（相对部署根） | DB 连接字符串 | 通过 `env_file: ../envs/db.env` 引用 |
-| `../envs/llm.env`（相对部署根） | LLM Provider keys | 通过 `env_file: ../envs/llm.env` 引用 |
-| 共享网络 `cogniforge-net` | 服务间容器名寻址 | 所有后端/AI/前端互通 |
-
-**为什么 `DEPLOY_PATH` 在三个仓的 CD 里都填同一个 `/opt/project/cogniforge`**：
-
-因为部署机上三个 compose 文件**物理上都放在同一个目录**，CI 拉镜像时不需要 `cd` 到不同目录。每仓只是**不同的 compose 文件名**：
-
-| GitHub 仓 | DEPLOY_PATH | COMPOSE_FILE |
-|----------|-------------|--------------|
-| `cogniforge` | `/opt/project/cogniforge` | `docker-compose.yml` |
-| `cogniforge-ai` | `/opt/project/cogniforge` | `docker-compose-ai.yml` |
-| `cogniforge-web` | `/opt/project/cogniforge` | `docker-compose-web.yml` |
-
-**为什么这样设计**：
-
-| 维度 | 单仓 | 多仓单部署根目录 |
-|------|------|-----------------|
-| 仓职责 | 一个仓含全部代码 | 每个仓只管自己（前端 / 后端 / AI） |
-| 部署目录 | `/opt/project/<仓>/` | **`/opt/project/<品牌>/`**（三个仓共用） |
-| compose 文件 | 单一 `docker-compose.yml` | 多个 `docker-compose-{role}.yml` |
-| 启动命令 | `docker compose up -d` | `docker compose -f docker-compose-<role>.yml up -d` |
-| 镜像版本 | 一锅炖 | 各仓独立 tag、独立发布 |
-
-> **关键约定**：仓名 ≠ 部署根目录名。**部署根目录名 = 产品品牌名**（这里叫 `cogniforge`，但仓叫 `cogniforge`、`cogniforge-ai`、`cogniforge-web`）。仓代码最终都汇总到部署根目录下的不同 compose 文件中。
+**CD 默认不向远程拷贝 compose / `.env`**：编排和密钥在服务器本地维护。GitHub Actions 只 SSH 登录镜像仓库并 `pull` + `up`。
 
 **首次部署步骤（一次性，运维手工做）**：
 
 ```bash
-# 1. 创建部署根目录结构
-mkdir -p /opt/project/envs
-mkdir -p /opt/project/cogniforge
-cd /opt/project/cogniforge
+# 1. 创建部署目录
+mkdir -p /opt/project/ai-job-hunter
+cd /opt/project/ai-job-hunter
 
-# 2. 拉取各仓代码（手工 git clone，只取 compose 文件 + Dockerfile 等）
-git clone <cogniforge-repo-url> _src_cogniforge
-git clone <cogniforge-ai-repo-url> _src_cogniforge-ai
-git clone <cogniforge-web-repo-url> _src_cogniforge-web
+# 2. 拉取项目代码（只取 compose + Dockerfile）
+git clone <repo-url> _src
+cp _src/docker-compose.yml ./
+cp _src/.env.example ./
 
-# 3. 把各仓的 compose 文件汇总到部署根目录
-cp _src_cogniforge/docker-compose.yml       ./docker-compose.yml
-cp _src_cogniforge-ai/docker-compose-ai.yml ./docker-compose-ai.yml
-cp _src_cogniforge-web/docker-compose-web.yml ./docker-compose-web.yml
+# 3. 配置 .env
+vi .env   # 填 DB_PASSWORD、JWT_SECRET、ENCRYPTION_KEY、DOMAIN 等
+chmod 600 .env
 
-# 4. 创建各服务独立 env（手动填值）
-#    前端不需要 .env.web（环境变量少到 ≤5 个，已全部写在 docker-compose-web.yml 里）
-cp _src_cogniforge/.env.example       ./.env
-cp _src_cogniforge-ai/.env.example    ./.env.ai
-vi ./.env ./.env.ai                  # 填 JWT_SECRET、ENCRYPTION_KEY、DOMAIN 等
-
-# 5. 创建公共 env（跨服务共享）
-#    从主仓 .env.example 提取 DB 字段生成 ../envs/db.env
-grep -E '^POSTGRES_|^REDIS_' _src_cogniforge/.env.example > ../envs/db.env
-
-#    从主仓 .env.example 提取 LLM 字段生成 ../envs/llm.env
-grep -E '^(OPENAI|ANTHROPIC|OPENROUTER)_' _src_cogniforge/.env.example > ../envs/llm.env
-
-#    手工填入真实值
-vi ../envs/db.env    # 填 POSTGRES_PASSWORD
-vi ../envs/llm.env   # 填 OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY
-
-chmod 600 ../envs/*.env ./.env*
-
-# 6. 创建网络
-docker network create cogniforge-net
+# 4. 创建网络
+docker network create proxy
 docker network create db-net
 ```
 
@@ -260,84 +214,10 @@ docker network create db-net
 
 ```yaml
 # CI SSH 脚本核心逻辑
-cd /opt/project/cogniforge                          # 切到部署目录（已有代码，不 git pull）
-docker compose -f docker-compose.yml pull cogniforge # 只拉镜像，不跑 git
-docker compose -f docker-compose.yml up -d --no-deps cogniforge
+cd /opt/project/ai-job-hunter          # 切到部署目录
+docker compose pull ai-job-hunter       # 只拉镜像
+docker compose up -d --no-deps          # 不重启依赖（DB 等）
 docker image prune -f --filter "until=72h"
-```
-
-**服务器永远不执行 `git pull`**：compose 文件夹下的 `.git/` 目录可能在仓里也可能不在，每次部署 CI/手工维护只需保证 compose 文件 + env_file 配置正确就行，代码版本由镜像 tag 决定。
-
-### 共享 env 文件（env_file 引用）
-
-`/opt/project/envs/` 是**同级目录**，不在任何仓里。存放**跨仓共享的配置**：
-
-```bash
-/opt/project/envs/
-├── db.env          # 数据库连接（PG_HOST/PORT/USER/PASSWORD/DB + REDIS_HOST/PORT）
-└── llm.env         # LLM Provider keys（OPENAI/ANTHROPIC/OPENROUTER keys）
-```
-
-**各仓 compose 用相对路径引用**：
-
-```yaml
-# cogniforge/docker-compose.yml（后端）
-services:
-  cogniforge:
-    env_file:
-      - ../envs/db.env        # ← 共享 DB 连接
-      - .env                  # ← 本仓私有（JWT、ENCRYPTION_KEY、DOMAIN）
-    environment:
-      AI_SERVICE_URL: http://cogniforge-ai:8086
-```
-
-```yaml
-# cogniforge-ai/docker-compose-ai.yml
-services:
-  cogniforge-ai:
-    env_file:
-      - ../envs/db.env        # ← DB 连接
-      - ../envs/llm.env       # ← LLM Provider keys
-      - .env                  # ← 本仓私有（LOG_LEVEL 等）
-```
-
-```yaml
-# cogniforge-web/docker-compose-web.yml
-# 静态 Nginx 镜像：API 地址在构建时写入（ARG API_BASE= 空 = 同源 /api/v1）。
-# 运行时 environment 改不了已打包的 JS。DOMAIN 给 Traefik labels 用，写在同目录 .env。
-services:
-  cogniforge-web:
-    image: ghcr.io/${IMAGE_NAMESPACE}/cogniforge/cogniforge-web:latest
-    labels:
-      - "traefik.http.routers.cogniforge-web.rule=Host(`${DOMAIN:?DOMAIN is required}`)"
-```
-
-**为什么 web 仓不需要独立 .env.web**：生产前端几乎只有 `DOMAIN`（Traefik）。API 基址是构建参数，不是容器 env。
-
-**env_file 引用约定**：
-
-| 服务的环境变量 | 放在哪 | 引用方式 |
-|--------------|--------|----------|
-| **DB 连接**（跨服务共享） | `../envs/db.env` | `env_file: ../envs/db.env` |
-| **LLM keys**（跨服务共享） | `../envs/llm.env` | `env_file: ../envs/llm.env` |
-| **后端密钥**（JWT、ENCRYPTION_KEY） | 本仓 `.env` | `env_file: .env` |
-| **AI 私有覆盖** | 本仓 `.env.ai` | `env_file: .env.ai` |
-| **前端变量**（≤5 个） | Traefik 用的 `DOMAIN` 放部署目录 `.env`；**API 基址走镜像 build-arg，不要写 compose environment** | `${DOMAIN:?...}` |
-
-**${VAR:-default} vs ${VAR:?error msg}**：
-
-- `${VAR:-default}` → 变量未设时用默认值（适合可选项）
-- `${VAR:?error msg}` → 变量未设时**启动报错并退出**（适合必填项如 `DOMAIN`）
-
-**为什么用相对路径**：每个仓 `git clone` 到自己的子目录，`../envs/` 自动定位到共享目录。
-
-**本地开发兼容**（`../envs/` 在你电脑不存在）：
-
-```yaml
-env_file:
-  - path: ../envs/db.env
-    required: false            # ← 本地缺文件时跳过，不报错（Docker ≥ v2.24）
-  - .env
 ```
 
 ---
@@ -345,7 +225,20 @@ env_file:
 ## 三、公用数据库部署
 
 > 每个项目共用一套 PostgreSQL + Redis，独立部署。
-> 推荐版本与 agent-insight 对齐：PostgreSQL 18（`pgvector/pgvector:0.8.6-pg18-bookworm`）+ Redis 8（`redis:8.8.0-alpine`）。
+> 推荐版本：PostgreSQL 18（`pgvector/pgvector:0.8.6-pg18-bookworm`）+ Redis 8（`redis:8.8.0-alpine`）。
+
+### Redis 键隔离（强制，先于写任何缓存代码）
+
+公用 Redis **只用 db0**。多项目不要 `SELECT 1/2`：Redis Cluster 只有 db0；`FLUSHDB` 会清掉整库。
+
+| 规则 | 做法 |
+|------|------|
+| 隔离方式 | 键前缀，不是库号 |
+| 键格式 | `{项目}:{模块}:{名字}`，小写，冒号分层 |
+| 示例 | `{{PROJECT_NAME}}:session:{id}` |
+| 禁止 | 无前缀键、短前缀 `cf:`（已废弃）、明文 API Key / 密码进 Redis |
+
+已落地键格式见 `references/`。
 
 ### 3.1 首次部署
 
@@ -465,6 +358,47 @@ networks:
 
 > Traefik 必须挂载 `/var/run/docker.sock` 才能自动发现容器路由。
 
+### 5.4 Portainer Restricted 用户权限（命令行 / CD 启动必加）
+
+> **场景**：容器由 `docker compose` / GitHub Actions 拉起，**不是**在 Portainer 里「Add stack」。  
+> Restricted（非管理员）用户要在 Portainer「容器」页看到并操作这些容器，必须在 compose 里写权限 label。
+
+| 现象 | 原因 |
+|------|------|
+| 在 Portainer **页面里点重启**，Restricted 用户仍能看到容器 | Portainer 自己维护的元数据还在 |
+| 用命令行 `docker compose up -d --force-recreate` 后，Restricted 用户**突然看不到** | 容器被新建，旧元数据丢失；compose 没带权限 label |
+
+**每个业务服务都要打**（管理员用户不受影响，可省略；给 Restricted 运维账号用时必写）：
+
+```yaml
+# 写法 A：labels 用映射（YAML 对象）—— 注意是 key: value，不要再套一层列表
+services:
+  {{PROJECT_NAME}}-server:
+    labels:
+      # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+      # （但在 Portainer 页面重启无影响）
+      io.portainer.accesscontrol.users: "{{PORTAINER_RESTRICTED_USER}}"
+
+# 写法 B：labels 用列表（与 Traefik labels 混写时常见）
+services:
+  {{PROJECT_NAME}}-admin-web:
+    labels:
+      - "traefik.enable=true"
+      # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+      # （但在 Portainer 页面重启无影响）
+      - "io.portainer.accesscontrol.users={{PORTAINER_RESTRICTED_USER}}"
+```
+
+| 规则 | 说明 |
+|------|------|
+| Label 名 | `io.portainer.accesscontrol.users` |
+| 值 | Portainer **Users** 里的用户名（不是显示名）；多人用逗号：`user1,user2` |
+| 范围 | **每个**要被 Restricted 用户看到的容器都要写；只写一个服务不够 |
+| CD 不拷贝 compose | 改 label 后必须在**服务器本地** `docker-compose.yml` 同步，再 `up -d --force-recreate` |
+| 找容器 | CD/命令行启动的项目去 **Containers**，不要只在 Swarm Services / 别人的 Stack 里找 |
+
+> 真实用户名写在服务器 compose / Portainer 里，skill 与公开文档用 `{{PORTAINER_RESTRICTED_USER}}` 占位。
+
 ---
 
 ## 六、方案 B：命令行部署
@@ -550,6 +484,9 @@ git push origin master
 
 ### 7.4 CD 分支策略 + GITHUB_TOKEN Demo（可直接复用）
 
+远程只拉镜像：`docker login` → `docker compose pull` → `docker compose up -d`。  
+**不要**默认 SCP `docker-compose.yml`。Demo CD（`github-cicd-template` 的 `ci-cd-workflow-template.yml`）会 echo「不拷贝 compose」，SCP 步骤注释保留。
+
 ```yaml
 on:
   push:
@@ -566,7 +503,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: branch_gate
         run: |
           set -e
@@ -580,8 +517,14 @@ jobs:
             preferred="main"
           fi
           [ "${GITHUB_REF_NAME}" = "${preferred}" ] && echo "should_deploy=true" >> "$GITHUB_OUTPUT" || echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+      - name: Skip copying compose files
+        if: steps.branch_gate.outputs.should_deploy == 'true'
+        run: |
+          echo "不拷贝 compose 文件到远程机器。"
+          echo "服务器已自行维护 docker-compose.yml，CD 只登录仓库并拉镜像启动，避免覆盖远程配置。"
+      # 默认不向远程拷贝 compose。需要时再解开 appleboy/scp-action。
       - if: steps.branch_gate.outputs.should_deploy == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -592,7 +535,7 @@ jobs:
 
 | 文件 | 谁使用 | 作用 |
 |------|--------|------|
-| `docker-compose.yml` | 远程服务器、GitHub Actions | 生产编排；只拉镜像，不在服务器 build |
+| `docker-compose.yml` | 远程服务器（运维手工放置） | 生产编排；CD 只 pull/up，**不拷贝覆盖** |
 | `docker-compose.local.yml` | 本地开发机 | 本地覆盖；补 `build`，仅本地 `--build` 使用 |
 | `env-docker-tag.example` | 团队协作（模板） | 记录 `DOCKER_TAG` 历史示例，不直接作为生产生效文件 |
 
@@ -619,6 +562,34 @@ DOCKER_TAG 约定（当镜像标签用 `${DOCKER_TAG}` 时）：
 
 > 推荐用 Docker labels（与容器绑定，容器启动即路由生效）。
 
+### 8.0 Labels 硬规则（必读，Demo / 生产都一样）
+
+路由器**没有**写 `service` 时，Traefik 会去找**和路由器同名**的服务。  
+compose 服务名、路由器名、Traefik 服务名三者经常不一致（例如路由器 `wifi-tie-admin`，compose 服务 `wifi-tie-admin-web`），不写 `.service=` 就会 404。
+
+| 对象 | 正确写法 | 说明 |
+|------|----------|------|
+| 业务容器（Nginx / Go / Java） | `routers.X.service=Y` + `services.Y.loadbalancer.server.port=<容器端口>` | 显式绑定，不要靠同名默认 |
+| Traefik Dashboard | `routers.traefik.service=api@internal` | **不要** `loadbalancer.server.port=8080`，那会把面板当普通后端，容易自己打自己 |
+| 域名 | `Host(\`${DOMAIN:?Set DOMAIN in .env}\`)` | 没填就拒绝启动，避免 `Host(\`\`)` |
+| 裸域 + www（默认不启用） | 注释保留：`Host(\`${DOMAIN}\`) \|\| Host(\`www.${DOMAIN}\`)` | 需要时解开，并注释掉只匹配裸域的那条 rule；同一路由器只能有一条 rule |
+| Traefik / Portainer 子域 | `Host(\`traefik.${BASE_DOMAIN:?Set BASE_DOMAIN in .env}\`)` | `/opt/docker/.env` 只写基础域名，不含 `traefik.` 前缀 |
+| Portainer Restricted 可见性 | `io.portainer.accesscontrol.users={{PORTAINER_RESTRICTED_USER}}` | 命令行/CD 重建后否则 Restricted 用户看不到容器；详见 **§5.4** |
+| Dashboard 登录（可先注释） | Basic Auth；`htpasswd -nbB admin 'your-password'`，输出里的 `$` 改成 `$$`；多人逗号拼接 | 见 `assets/traefik.env.example` |
+
+```yaml
+# ✅ 路由器名可以和 compose 服务名不同，但必须写 service
+- "traefik.http.services.wifi-tie-admin-web.loadbalancer.server.port=80"
+- "traefik.http.routers.wifi-tie-admin.rule=Host(`${DOMAIN:?Set DOMAIN in web.env or .env}`)"
+# 使用环境变量，同时匹配裸域和 www（Demo/生产默认不启用，需要时解开并注释掉上一行）
+#- "traefik.http.routers.wifi-tie-admin-web.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+- "traefik.http.routers.wifi-tie-admin.service=wifi-tie-admin-web"
+
+# ❌ 只写路由器、不写 service：Traefik 会找 wifi-tie-admin，实际服务却是 wifi-tie-admin-web
+```
+
+Demo CD **不拷贝** compose。改 labels 后必须在服务器本地改 `docker-compose.yml`，再 `docker compose up -d`。
+
 ### 8.1 Web 前端
 
 ```yaml
@@ -626,6 +597,10 @@ labels:
   - "traefik.enable=true"
   # 路由：访问 {{DOMAIN}} → 本容器
   - "traefik.http.routers.{{PROJECT_NAME}}-web.rule=Host(`{{DOMAIN}}`)"
+  # 使用环境变量，同时匹配裸域和 www（不启用；需要时解开并注释掉上一行）
+  #- "traefik.http.routers.{{PROJECT_NAME}}-web.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+  # 路由器没写 service 时会找同名服务；显式写上，避免和 compose 服务名不一致时 404
+  - "traefik.http.routers.{{PROJECT_NAME}}-web.service={{PROJECT_NAME}}-web"
   - "traefik.http.routers.{{PROJECT_NAME}}-web.entrypoints=websecure"
   - "traefik.http.routers.{{PROJECT_NAME}}-web.tls=true"
   - "traefik.http.routers.{{PROJECT_NAME}}-web.tls.certresolver=letsencrypt"
@@ -645,6 +620,7 @@ labels:
   - "traefik.enable=true"
   # 只路由 /api/* 路径
   - "traefik.http.routers.{{PROJECT_NAME}}-api.rule=Host(`{{DOMAIN}}`) && PathPrefix(`/api`)"
+  - "traefik.http.routers.{{PROJECT_NAME}}-api.service={{PROJECT_NAME}}-api"
   - "traefik.http.routers.{{PROJECT_NAME}}-api.entrypoints=websecure"
   - "traefik.http.routers.{{PROJECT_NAME}}-api.tls=true"
   - "traefik.http.routers.{{PROJECT_NAME}}-api.tls.certresolver=letsencrypt"
@@ -691,10 +667,10 @@ certificatesResolvers:
 |--------|----------|----------|------|
 | **Nginx 前端**（静态站 / SPA） | 自配 `location = /health` | `/health`（监听 **80**） | **不是**框架自带；写在 `nginx.conf` 里 `return 200` |
 | **Spring Boot** | **官方 Actuator**（`spring-boot-starter-actuator`） | **`/actuator/health`**（业务端口，如 9280） | 原生能力；**不是** `/health`（除非你自己改了 `management.endpoints.web.base-path`） |
-| **Go（Gin 等）** | **项目自建**路由，无统一官方标准 | 常见自建 **`/health`**（如 cogniforge） | 框架不自带 Actuator；看仓库 `router` 里是否注册了 `/health` |
+| **{{PROJECT_NAME}}** | **项目自建**路由，无统一官方标准 | 常见自建 **`/health`**（如 Gin） | 框架不自带 Actuator；看仓库 `router` 里是否注册了 `/health` |
 | **Python FastAPI** | 项目自建 | 常见 `/health` | 同上，看代码 |
 
-> agent-insight：后端是 **Java / Spring Boot** → 探 **`9280/actuator/health`**。  
+> 后端是 **Java / Spring Boot** → 探 **`9280/actuator/health`**。  
 > 前端 compose 里的 `http://127.0.0.1:80/health` 只针对 **Nginx 容器**，**不要**改成 actuator。
 
 | 容器角色 | 典型进程 | 健康检查目标 | 正确示例 |
@@ -806,6 +782,19 @@ docker inspect {{PROJECT_NAME}} --format '{{json .NetworkSettings.Networks}}'
 > Traefik 本身：
 > - 镜像必须 **≥ v3.6.1**（Docker Engine 29）
 > - 自定义 `:/traefik.yml` 挂载必须 `command: ["traefik", "--configFile=/traefik.yml"]`
+> - 路由器必须写 `.service=`：没写时 Traefik 找同名服务。路由器 `wifi-tie-admin`、compose 服务 `wifi-tie-admin-web` 对不上就会 404
+> - 业务容器用 `loadbalancer.server.port`；Traefik Dashboard 用 `api@internal`，不要转到 8080
+
+### ❌ 404 — 路由器没指定 service / 服务名对不上
+
+路由器没写 `service` 时，Traefik 默认找**同名服务**。路由器叫 `wifi-tie-admin`、compose 服务叫 `wifi-tie-admin-web` 就会找不到后端。
+
+```yaml
+- "traefik.http.services.wifi-tie-admin-web.loadbalancer.server.port=80"
+- "traefik.http.routers.wifi-tie-admin.service=wifi-tie-admin-web"
+```
+
+业务容器用 `loadbalancer.server.port`；Traefik Dashboard 用 `api@internal`，不要 `loadbalancer.server.port=8080`。详见 **§8.0**。
 
 ### ❌ 502 — 后端容器不可达
 
@@ -840,7 +829,7 @@ POST http://localhost:8080/api/v1/auth/login  net::ERR_CONNECTION_REFUSED
 **根因**：JS 在**访客浏览器**里执行。`localhost` = 访客电脑，不是 SSH 那台服务器。  
 静态前端把 `http://localhost:8080` 打进包，或把 `API_BASE` 写成 `/api` 再拼 `/api/v1`，都会错。
 
-**解决**（Cogniforge 详见 `references/cogniforge.md`）：
+**解决**：
 
 - 生产 `API_BASE` 为空字符串（同源 `/api/v1/...`）
 - 本地 `pnpm dev` 才用 `http://localhost:8080`
@@ -855,6 +844,29 @@ docker inspect {{PROJECT_NAME}} | grep Networks -A 10
 
 # 容器内测试
 docker exec {{PROJECT_NAME}} curl http://internal-service:8080/health
+```
+
+### ❌ Portainer Restricted 用户看不到命令行 / CD 拉起的容器
+
+**症状**：管理员能在 Containers 里看到；Restricted 用户看不到。或：页面里重启后还在，`docker compose up --force-recreate` 后消失。
+
+**根因**：Portainer 的 Restricted 权限写在容器元数据里；命令行重建等于新容器，元数据丢了。必须在 compose `labels` 里写死：
+
+```yaml
+labels:
+  # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+  # （但在 Portainer 页面重启无影响）
+  io.portainer.accesscontrol.users: "{{PORTAINER_RESTRICTED_USER}}"
+```
+
+与 Traefik 列表式 labels 混写时用：`"io.portainer.accesscontrol.users={{PORTAINER_RESTRICTED_USER}}"`。  
+每个业务服务都要写。详见 **§5.4**。
+
+**自查**：
+
+```bash
+docker inspect {{PROJECT_NAME}}-server --format '{{index .Config.Labels "io.portainer.accesscontrol.users"}}'
+# 应打印 Portainer 用户名；空 = compose 没带上或服务器 compose 未同步
 ```
 
 ---
@@ -929,61 +941,41 @@ docker exec db-postgres pg_dump -U postgres {{PROJECT_NAME}} \
 
 ---
 
-## 十二、agent-insight 专项（仓库 `docker-traefik/`）
+## 十二、部署参考（常见模式）
 
-> 详细步骤与路由表见 **`references/agent-insight.md`**。这里只列硬约束，避免与通用章节冲突时选错。
-
-### 12.1 三层目录（固定）
+### 12.1 目录结构
 
 ```
 /opt/docker/                     # Traefik v3.6.1+ + Portainer
-/opt/databases/                  # mysql + mongodb + redis + pgsql(pgvector)
+/opt/databases/                  # PostgreSQL + Redis
 /opt/project/
-├── envs/{db,llm}.env            # compose 通过 ../envs/*.env 引用
-└── agent-insight/               # 应用 compose；.env 放 DOMAIN / DATA_ROOT
+└── {{PROJECT_NAME}}/            # 应用 compose；.env 直接放这里
     └── data/                    # DATA_ROOT 默认挂载点
 ```
 
-### 12.2 路由方案（三选一，容器名冲突不可并存）
+### 12.2 路由方案
 
-| Compose 文件 | 模式 |
-|--------------|------|
-| `docker-compose.yml` | **A 推荐**：只暴露 frontend；Nginx 代理 `/api` → backend:9280 |
-| `docker-compose.b-traefik-api.yml` | B：Traefik 同域 `PathPrefix(/api)` |
-| `docker-compose.c-separate-domains.yml` | C：`FRONTEND_DOMAIN` + `API_DOMAIN` |
+| 模式 | 说明 |
+|------|------|
+| **A（推荐）** | 只暴露前端；Nginx 代理 `/api` → 后端 |
+| B | Traefik 同域 `PathPrefix(/api)` |
+| C | 前端和后端用不同域名 |
 
-### 12.3 端口与镜像
+### 12.3 Traefik / Portainer
 
-- 后端 **9280**，前端 **80**（仅 `expose`，不映射宿主机）
-- 镜像：`ghcr.io/${IMAGE_NAMESPACE}/agent-insight/{backend,frontend}:latest`
-- 服务器只 pull 镜像，不在生产机 `git pull` 构建
-
-### 12.4 Traefik / Portainer
-
-- Traefik 镜像必须 **≥ v3.6.1**（Docker Engine 29 兼容；否则 Docker provider 挂掉全站 404）
+- Traefik 镜像必须 **≥ v3.6.1**（Docker Engine 29 兼容）
 - Portainer：`Host(\`portainer.${BASE_DOMAIN}\`)`，`/opt/docker/.env` 只写基础域名
-- 优先 Docker Labels；`traefik.yml` 的 file provider 可关，避免与 Labels 双写同一路由
+- 优先 Docker Labels
 
-### 12.5 常见坑
+### 12.4 常见坑
 
 | 坑 | 正确做法 |
 |----|---------|
-| labels 里 `${DOMAIN}` 不替换 | 写在 compose 同级 `.env` 或 Portainer Stack env，不要指望 `environment:` |
-| `env_file: ../envs/db.env` 找不到 | 文件放 `/opt/project/envs/`，不是 `agent-insight/envs/` |
+| labels 里 `${DOMAIN}` 不替换 | 写在 compose 同级 `.env` |
+| 路由器没写 `service` → 404 | 显式 `routers.X.service=Y` |
+| Traefik Dashboard 转到 8080 | 用 `service=api@internal` |
+| `.env` 找不到 | 文件放 `/opt/project/{{PROJECT_NAME}}/` |
 | `/opt/app` vs `/opt/project` | 统一 **`/opt/project`** |
-| PG 18 挂载旧路径 | `./pgsql/data:/var/lib/postgresql` |
-
----
-
-## 十三、Cogniforge 专项（三仓 / 方案 A）
-
-> 详细约定见 **`references/cogniforge.md`**。这里只列硬约束。
-
-- 部署根：`/opt/project/cogniforge/`（三个 compose 放一起）
-- 路由：**方案 A** — Traefik 只挂 `cogniforge-web`；Nginx `location /api/` → `cogniforge:8080`
-- 前端镜像是静态 Nginx：`API_BASE` 必须 **build-arg**，生产为空（同源 `/api/v1`）
-- **禁止** JS 写死 `http://localhost:8080`；禁止 compose 用 `NUXT_PUBLIC_API_BASE` 幻想运行时改地址
-- 公网 `ERR_CONNECTION_REFUSED localhost:8080` = 浏览器打到了访客电脑，重建 web 镜像
 
 ---
 
@@ -991,11 +983,10 @@ docker exec db-postgres pg_dump -U postgres {{PROJECT_NAME}} \
 
 | 文件 | 用途 |
 |------|------|
-| `references/agent-insight.md` | **agent-insight / docker-traefik 专项部署真相** |
-| `references/cogniforge.md` | **Cogniforge 前端 API_BASE / 同源反代 / 公网打到 localhost 专项** |
 | `references/databases/docker-compose.yml` | 公用数据库 compose 模板（PG18 pgvector + Redis8） |
 | `references/databases/databases.env.example` | 数据库环境变量模板 |
 | `assets/traefik-stack.yml` | Portainer 部署 Traefik compose（需 ≥ v3.6.1） |
+| `assets/traefik.env.example` | Traefik 同级 `.env` 模板（`BASE_DOMAIN` / Dashboard htpasswd） |
 | `assets/deploy.sh` | 一键部署脚本（需填入真实值后使用） |
 
 ---
@@ -1018,9 +1009,10 @@ docker exec db-postgres pg_dump -U postgres {{PROJECT_NAME}} \
 | `{{ENCRYPTION_KEY}}` | `xxx` | GitHub Secrets（生成后永不换） |
 | `{{LLM_API_KEY}}` | `sk-xxx` | GitHub Secrets |
 | `{{EMAIL}}` | `admin@example.com` | Let's Encrypt 注册邮箱 |
-| `{{APP_NETWORK}}` | `proxy`（本机房） | agent-insight / Cogniforge 固定用 `proxy`；通用模板也可用 `{{PROJECT_NAME}}-net` |
+| `{{APP_NETWORK}}` | `proxy`（本人云端部署） | 本人云端部署固定用 `proxy`；通用模板也可用 `{{PROJECT_NAME}}-net` |
 | `{{DB_NETWORK}}` | `db-net` | 固定：所有项目共用 |
 | `{{VOLUME_UPLOADS}}` | `myapp-uploads` | 用户指定（建议 `{{PROJECT_NAME}}-uploads`） |
 | `{{PORT}}` | `8080` | 项目 docker-compose.yml |
 | `{{REGISTRY}}` | `ghcr.io/username` | GitHub Packages |
+| `{{PORTAINER_RESTRICTED_USER}}` | `ops-user` | Portainer Users 里的 Restricted 用户名；compose label `io.portainer.accesscontrol.users` |
 

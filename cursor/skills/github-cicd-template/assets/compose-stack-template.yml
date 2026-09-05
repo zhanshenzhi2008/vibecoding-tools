@@ -66,6 +66,11 @@ services:
       start_period: 60s                          # Spring Boot 启动慢，给足时间
     networks:
       - app-net
+    # Portainer Restricted：命令行/CD 重建后否则非管理员看不到容器（改成真实用户名）
+    # labels:
+    #   # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+    #   # （但在 Portainer 页面重启无影响）
+    #   io.portainer.accesscontrol.users: "YOUR_PORTAINER_RESTRICTED_USER"
 
   # ---------------------------------------------------------------------------
   # 前端（Nginx + React 静态文件，端口 80）
@@ -80,6 +85,23 @@ services:
       - YOUR_BACKEND_SERVICE
     networks:
       - app-net
+    # Traefik（生产/Demo 走自动 HTTPS 时解开；不要映射宿主机 80，改成 expose: ["80"]）
+    # 路由器没写 service 时，Traefik 会找「和路由器同名」的服务。
+    # 路由器名若和 compose 服务名不同（例：routers.wifi-tie-admin vs 服务 wifi-tie-admin-web），必须显式 .service=
+    # 业务容器用 loadbalancer.server.port；Traefik Dashboard 用 api@internal，不要 port=8080
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.docker.network=proxy"
+    #   - "traefik.http.services.YOUR_FRONTEND_SERVICE.loadbalancer.server.port=80"
+    #   - "traefik.http.routers.YOUR_FRONTEND_SERVICE.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+    #   # 使用环境变量，同时匹配裸域和 www（不启用；需要时解开，并注释掉上一行）
+    #   #- "traefik.http.routers.wifi-tie-admin-web.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+    #   - "traefik.http.routers.YOUR_FRONTEND_SERVICE.service=YOUR_FRONTEND_SERVICE"
+    #   - "traefik.http.routers.YOUR_FRONTEND_SERVICE.entrypoints=websecure"
+    #   - "traefik.http.routers.YOUR_FRONTEND_SERVICE.tls.certresolver=letsencrypt"
+    #   # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+    #   # （但在 Portainer 页面重启无影响）
+    #   - "io.portainer.accesscontrol.users=YOUR_PORTAINER_RESTRICTED_USER"
 
   # ---------------------------------------------------------------------------
   # MySQL（可选 - 如果已经有外部 DB，删掉这一段）

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="lonely square root of 3">
+  <!--
+    Recommended lockup:
+    1) lonely as a caption row ABOVE the vinculum (reads top→bottom: lonely / √3)
+    2) √3 as hero below — no overlap, no tilt sticker
+  -->
+  <defs>
+    <linearGradient id="inkWash" x1="8" y1="2" x2="56" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3d5c5a"/>
+      <stop offset="0.35" stop-color="#243a42"/>
+      <stop offset="0.7" stop-color="#121c24"/>
+      <stop offset="1" stop-color="#06090d"/>
+    </linearGradient>
+    <radialGradient id="mist" cx="28%" cy="22%" r="65%">
+      <stop offset="0" stop-color="#8fa8a4" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#4a6a68" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#06090d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="url(#inkWash)"/>
+  <rect width="64" height="64" rx="14" fill="url(#mist)"/>
+
+  <!-- caption: lonely -->
+  <text
+    x="32"
+    y="14"
+    text-anchor="middle"
+    font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace"
+    font-size="9"
+    font-weight="700"
+    letter-spacing="0.14em"
+    fill="#e8eef0"
+  >lonely</text>
+
+  <!-- √3 hero -->
+  <g fill="none" stroke="#f2f5f4" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke-width="3.2" d="M14 48 H21 L31 22"/>
+    <path stroke-width="3" d="M31 22 H54"/>
+  </g>
+  <text
+    x="43"
+    y="47"
+    text-anchor="middle"
+    font-family="Georgia, 'Source Serif 4', 'Times New Roman', serif"
+    font-size="22"
+    font-weight="700"
+    fill="#f2f5f4"
+  >3</text>
+</svg>

@@ -65,6 +65,10 @@ env:
 
 **CD 默认不拷贝 compose**：服务器自己维护 `docker-compose.yml` 和 `.env`。Demo CD 会 echo「不拷贝 compose 文件到远程机器」，SCP 步骤注释保留。远程只做 `docker login` → `pull` → `up`。
 
+Traefik：路由器必须写 `service=`。没写时 Traefik 找和路由器同名的服务。Demo 里 `wifi-tie-admin` 路由 vs `wifi-tie-admin-web` 服务会对不上，公网 404。改 labels 只能改服务器上的 compose。详见 skill「坑 2.2」。
+
+裸域 + www：Demo 默认不启用，compose 里注释保留 `Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)`，需要时再解开。
+
 ### CD env（写在 workflow 顶部）
 
 ```yaml

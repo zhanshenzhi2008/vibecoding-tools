@@ -45,6 +45,13 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 - Demo CD（`assets/ci-cd-workflow-template.yml`）必须：部署前 `echo` 说明不拷贝；SCP 步骤整段**注释保留**，需要时再解开
 - 静态站模板的 `rsync` 是前端产物，不是 compose，不受这条约束
 
+**硬规则：命令行 / CD 拉起的容器要给 Portainer Restricted 用户打权限 label**
+
+- Label：`io.portainer.accesscontrol.users=<Portainer 用户名>`
+- 不写则：页面里重启还在，`docker compose --force-recreate` 后 Restricted 用户看不到
+- 每个业务服务都要写；模板见 `assets/compose-stack-template.yml` 注释；通说见 `deploy` skill §5.4
+- CD **不**拷贝 compose，改 label 必须改**服务器本地**文件后再重建
+
 **硬规则：前端 Node 默认 22（GitHub 推荐）**
 
 - CI：`NODE_VERSION: '22'`（`assets/ci-template.yml` / `assets/ci-cd-static-template.yml` 已写死 22）
@@ -469,6 +476,8 @@ kubectl set image deployment/my-backend \
 
 **为什么需要**：模板 1 默认假设服务器上已有 `docker-compose.yml`。本模板是一份**生产级**的 compose 文件范例（健康检查、depends_on condition、卷挂载），**放到服务器上**，不是放到 GitHub Actions 上。
 
+Traefik labels 写在这份 compose 里（Demo 也一样）。路由器必须显式 `service=`，不要靠「和路由器同名」的默认查找。详见下方「坑 2.2」。
+
 ---
 
 ## 常见坑（避免踩）
@@ -515,6 +524,46 @@ echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
 **根因**：用 SCP 覆盖服务器已维护的 compose。远程目录往往只有运维可写，CD SSH 用户也不该改编排文件。
 
 **解法**：Demo CD 默认 **不拷贝** compose。部署 step 先 echo 说明；SCP 整段注释保留。compose 由运维首次放到 `DEPLOY_PATH`。若 `go-yaml load error ... L10.C3`，在**服务器本地**修 Tab/非法字符，不要靠 CD 覆盖。
+
+### ❌ 坑 2.2：Traefik 路由器没写 service → 按路由名找后端 → 404
+
+**症状**：容器是 Up、域名 DNS 也对，但公网 404。Traefik 日志/API 里路由器在，后端服务名对不上。
+
+**根因**：路由器没有显式 `service` 时，Traefik 默认寻找**和路由器同名**的服务。Demo 里常见：路由器叫 `wifi-tie-admin`，compose 服务叫 `wifi-tie-admin-web`。
+
+**解法**（写在服务器 `docker-compose.yml` 的 labels 里；Demo CD 不拷贝 compose，必须改远程文件）：
+
+```yaml
+# 路由器名可以和 compose 服务名不同，但必须写 service
+- "traefik.http.services.wifi-tie-admin-web.loadbalancer.server.port=80"
+- "traefik.http.routers.wifi-tie-admin.rule=Host(`${DOMAIN:?Set DOMAIN in web.env or .env}`)"
+# 使用环境变量，同时匹配裸域和 www（Demo 默认不启用；需要时解开并注释掉上一行）
+#- "traefik.http.routers.wifi-tie-admin-web.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+- "traefik.http.routers.wifi-tie-admin.service=wifi-tie-admin-web"
+```
+
+相关约定（Demo / 生产相同）：
+- `${DOMAIN:?...}`：没填域名就拒绝启动，避免 `Host(\`\`)`
+- 裸域 + www：默认注释保留，需要时再开；同一路由器只能有一条 `rule`
+- 业务容器用 `loadbalancer.server.port` 指向容器监听端口（Nginx 一般是 80）
+- Traefik **自己的** Dashboard 不要 `loadbalancer.server.port=8080`，用 `service=api@internal`
+- Dashboard 子域用 `traefik.${BASE_DOMAIN:?Set BASE_DOMAIN in .env}`（`/opt/docker/.env` 同级，不含 `traefik.` 前缀）
+- 登录可先注释；生成：`htpasswd -nbB admin 'your-password'`，输出里的 `$` 改成 `$$`；多人逗号拼接
+
+### ❌ 坑 2.3：Portainer Restricted 用户重建后看不到容器
+
+**症状**：管理员能看到；Restricted 用户看不到。或：Portainer 页面里重启还在，`docker compose up --force-recreate` 后消失。
+
+**根因**：Restricted 权限写在容器元数据里；命令行/CD 重建是新容器。必须在服务器 compose 每个业务服务加：
+
+```yaml
+labels:
+  # Portainer 权限控制：不配置会导致手动 docker compose 重建后 Restricted 权限丢失
+  # （但在 Portainer 页面重启无影响）
+  io.portainer.accesscontrol.users: "YOUR_PORTAINER_RESTRICTED_USER"
+```
+
+与 Traefik 列表式 labels 混写时用 `"io.portainer.accesscontrol.users=..."`。详见 Cursor `deploy` skill **§5.4**。
 
 ### ❌ 坑 3：服务启动后立即被 kill
 
