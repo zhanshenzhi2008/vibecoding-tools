@@ -84,7 +84,7 @@ env:
 
 ```bash
 # ── SSH 连接（4 个，按顺序填）──
-gh secret set DEPLOY_HOST        --body "156.226.176.141"         --env production
+gh secret set DEPLOY_HOST        --body "{{SERVER_IP}}"         --env production
 gh secret set DEPLOY_USER        --body "deploy"                  --env production
 gh secret set DEPLOY_SSH_PORT    --body "22000"                   --env production
 gh secret set DEPLOY_SSH_KEY     < ~/.ssh/github_actions          --env production
@@ -120,7 +120,7 @@ gh secret set IMAGE_REGISTRY_TOKEN --body "ghp_xxxxxxxxxxxx"     --env productio
 
 ```bash
 # xcy 是你云服务器的名字，所有仓库共用
-gh secret set DEPLOY_HOST --body "156.226.176.141" --env xcy
+gh secret set DEPLOY_HOST --body "{{SERVER_IP}}" --env xcy
 gh secret set DEPLOY_SSH_KEY < ~/.ssh/github_actions --env xcy
 
 # 不同服务器，新建不同 environment

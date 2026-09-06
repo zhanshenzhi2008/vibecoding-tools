@@ -133,7 +133,7 @@ Spring Boot + React/Vue + 一台服务器？
 **或者用 `gh` CLI 一把梭**：
 
 ```bash
-gh secret set DEPLOY_HOST          --body "156.226.176.141"     --env production
+gh secret set DEPLOY_HOST          --body "{{SERVER_IP}}"     --env production
 gh secret set DEPLOY_USER          --body "deploy"              --env production
 gh secret set DEPLOY_SSH_PORT      --body "22000"               --env production
 gh secret set DEPLOY_SSH_KEY       < ~/.ssh/github_actions      --env production
@@ -167,13 +167,13 @@ gh secret set IMAGE_REGISTRY_TOKEN --body "ghp_xxxxxxxxxxxx" --env production
 
 ```bash
 # 一台云服务器，对应一个 environment，所有仓库共享
-gh secret set DEPLOY_HOST --body "156.226.176.141" --env xcy
+gh secret set DEPLOY_HOST --body "{{SERVER_IP}}" --env xcy
 gh secret set DEPLOY_USER --body "deploy" --env xcy
 gh secret set DEPLOY_SSH_KEY < ~/.ssh/github_actions --env xcy
 
 # 不同服务器/项目，新建不同的 environment
-gh secret set DEPLOY_HOST --body "10.0.1.5" --env aliyun-projectA
-gh secret set DEPLOY_HOST --body "10.0.2.8" --env aliyun-projectB
+gh secret set DEPLOY_HOST --body "{{SERVER_IP}}" --env aliyun-projectA
+gh secret set DEPLOY_HOST --body "{{SERVER_IP}}" --env aliyun-projectB
 ```
 
 **environment 命名建议**：
