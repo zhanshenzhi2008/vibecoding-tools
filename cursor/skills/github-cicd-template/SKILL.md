@@ -67,6 +67,8 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 
 **env（公开配置，写在 workflow 顶部）**
 
+> ⚠️ **硬规则：`services` 块不支持 `${{ env.* }}` 表达式**。镜像版本（如 MySQL/MongoDB/Redis 版本）必须直接写在 `services.*.image` 下，不要用变量引用。
+
 | 维度 | 变量 | 默认值 | 说明 |
 |------|------|--------|------|
 | 镜像仓库 | `IMAGE_REGISTRY` | `ghcr.io` | 也可填 `registry.cn-hangzhou.aliyuncs.com` |
@@ -266,18 +268,14 @@ env:
   FRONTEND_DIR: agent-insight-web          # ← 改 5：前端代码目录
   NODE_VERSION: '22'                       # ← 改 6：Node 版本
 
-  # 服务镜像版本（与部署环境一致）
-  MYSQL_IMAGE: mysql:8.4                  # ← 改 7：MySQL 版本
-  MONGODB_IMAGE: mongo:8.3               # ← 改 8：MongoDB 版本
-  REDIS_IMAGE: redis:8.8.0-alpine        # ← 改 9：Redis 版本
-
+  # ⚠️ 服务镜像版本：直接改 ci-template.yml 里 services.*.image，不要用 env 变量
   # SQL / MongoDB 初始化脚本（相对于仓库根）
-  SQL_INIT_SCRIPT: fixtures/mysql/init.sql         # ← 改 10：建表 SQL 路径
-  MONGODB_INIT_SCRIPT: fixtures/mongodb/init.js    # ← 改 11：MongoDB 初始化脚本
+  SQL_INIT_SCRIPT: fixtures/mysql/init.sql         # ← 改 7：建表 SQL 路径
+  MONGODB_INIT_SCRIPT: fixtures/mongodb/init.js    # ← 改 8：MongoDB 初始化脚本
 
   # E2E 配置
-  E2E_PORT: 3010                           # ← 改 12：E2E 测试 Vite dev server 端口
-  PLAYWRIGHT_BROWSERS: chromium             # ← 改 13：浏览器（chromium / firefox / webkit）
+  E2E_PORT: 3010                           # ← 改 9：E2E 测试 Vite dev server 端口
+  PLAYWRIGHT_BROWSERS: chromium             # ← 改 10：浏览器（chromium / firefox / webkit）
 ```
 
 > **CI 不需要配 secret**（不需要 SSH、不需要镜像 token）。只需确保 SQL/MongoDB 初始化脚本路径正确。

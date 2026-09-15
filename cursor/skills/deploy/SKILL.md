@@ -15,6 +15,8 @@ description: |
   - "PGSQL"、"镜像内置 configs"
   - "localhost:8080"、"公网打到本地"、"API_BASE"、"NUXT_PUBLIC_API_BASE"
   - "Redis 键"、"{{PROJECT_NAME}}:modelcfg"、"db0 前缀隔离"
+  - "CI/CD"、"GitHub Actions"、"镜像标签"、"docker-tag"
+  - "Demo 模板"、"references/app"、"新服务部署"
 
   模板变量说明（部署时替换）：
   - {{PROJECT_NAME}}  项目名，如 "ai-job-hunter"
@@ -121,9 +123,47 @@ grep -rE "BEGIN .* PRIVATE KEY" .
 
 共享网络：{{APP_NETWORK}}（应用层；**本人云端部署生产约定名是 `proxy`**）
 公用网络：{{DB_NETWORK}}（数据层，默认名 `db-net`）
-公用基础设施：/opt/databases/（所有项目共用）
-边缘入口：/opt/docker/（Traefik + Portainer）
+
+## 一、网络分层架构（生产推荐）
+
 ```
+                    ┌─────────────────────┐
+                    │   Traefik :80/:443  │
+                    │   (proxy 网络)      │
+                    └──────────┬──────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+          ▼                    ▼                    ▼
+   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+   │   Frontend   │     │   Backend    │     │  AI Service │
+   │  (proxy)     │     │  (proxy)    │     │ (internal)  │
+   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+          │                    │                    │
+          ▼                    ▼                    ▼
+   ┌─────────────┐     ┌─────────────────────────────┐
+   │  internal    │◄────│       internal 网络         │
+   │  (proxy)     │     │   (服务间内部通信)           │
+   └─────────────┘     └─────────────┬───────────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    ▼                                 ▼
+             ┌─────────────┐                 ┌─────────────┐
+             │  postgres   │                 │   redis     │
+             │  db-net     │                 │  db-net     │
+             └─────────────┘                 └─────────────┘
+```
+
+| 网络 | 用途 | 访问对象 |
+|------|------|----------|
+| `proxy` | Traefik 入口 | 外部流量 → Frontend / Backend |
+| `internal` | 内部服务通信 | Backend ↔ Backend、Backend → AI Service |
+| `db-net` | 数据库访问 | 业务容器 → PostgreSQL / Redis |
+
+> **规则**：
+> - 需要公网访问的服务：`proxy`
+> - 服务间内部调用：`internal`
+> - 访问数据库：`db-net`
 
 > **网络命名对照**：通用模板里的 `{{APP_NETWORK}}` 在本机房实际部署中 = **`proxy`**。
 > 写 labels / compose 时跟仓库 `docker-traefik` 保持一致，不要混用 `app-net` 与 `proxy`。
@@ -988,6 +1028,142 @@ docker exec db-postgres pg_dump -U postgres {{PROJECT_NAME}} \
 | `assets/traefik-stack.yml` | Portainer 部署 Traefik compose（需 ≥ v3.6.1） |
 | `assets/traefik.env.example` | Traefik 同级 `.env` 模板（`BASE_DOMAIN` / Dashboard htpasswd） |
 | `assets/deploy.sh` | 一键部署脚本（需填入真实值后使用） |
+
+## 十三、快速部署 Demo 模板（新建服务指引）
+
+> 一套完整的 Demo 模板，零环境泄漏，可以直接复制部署新服务。
+
+### 13.1 模板文件清单
+
+| 文件 | 用途 | 部署位置 |
+|------|------|----------|
+| `references/app/docker-compose.yml` | 后端服务 compose | `/opt/project/{{PROJECT_NAME}}/docker-compose.yml` |
+| `references/app/docker-compose.web.yml` | 前端 Web compose | 同上 |
+| `references/app/docker-compose.local.yml` | 本地开发覆盖 | 项目根目录 |
+| `references/app/env.example` | 环境变量模板 | `/opt/project/{{PROJECT_NAME}}/.env.example` |
+| `references/app/docker-tag.env.example` | 镜像版本历史模板 | `/opt/project/{{PROJECT_NAME}}/docker-tag.env.example` |
+| `references/app/Dockerfile` | Go 后端 Dockerfile | 项目根目录 |
+| `references/app/Dockerfile.web` | 前端 Dockerfile | 项目根目录 |
+| `references/app/nginx.conf` | 前端 Nginx 配置 | 项目根目录 |
+| `references/ci-cd/docker-tag.yml` | GitHub Actions CI/CD | `.github/workflows/docker-tag.yml` |
+
+### 13.2 部署步骤（5 分钟快速上手）
+
+#### Step 1：服务器初始化（一次性）
+
+```bash
+# SSH 到服务器
+ssh -p 22000 deploy@your-server-ip
+
+# 创建网络（如果不存在）
+docker network create proxy 2>/dev/null || true
+docker network create db-net 2>/dev/null || true
+
+# 创建部署目录
+sudo mkdir -p /opt/project
+sudo chown deploy:deploy /opt/project
+```
+
+#### Step 2：创建项目模板
+
+```bash
+# 在本地项目根目录
+mkdir -p /opt/project/my-new-service  # 或手动创建
+
+# 复制模板文件
+cp ~/.cursor/skills/deploy/references/app/docker-compose.yml /opt/project/my-new-service/
+cp ~/.cursor/skills/deploy/references/app/env.example /opt/project/my-new-service/.env.example
+cp ~/.cursor/skills/deploy/references/app/docker-tag.env.example /opt/project/my-new-service/docker-tag.env.example
+
+# 复制 CI/CD（项目根目录）
+cp ~/.cursor/skills/deploy/references/ci-cd/docker-tag.yml ./.github/workflows/docker-tag.yml
+```
+
+#### Step 3：替换模板变量
+
+```bash
+# 必填变量（Ctrl+F 替换）
+{{PROJECT_NAME}}     → my-new-service（小写）
+{{DOMAIN}}          → my-new-service.example.com
+{{APP_PORT}}        → 8080（应用端口）
+{{IMAGE_REGISTRY}}  → ghcr.io/your-org
+
+# 可选变量
+{{GITHUB_ORG}}      → your-github-username 或 organization 名
+```
+
+#### Step 4：配置环境变量
+
+```bash
+# 服务器上
+cd /opt/project/my-new-service
+cp .env.example .env
+chmod 600 .env
+vi .env  # 填写真实值
+
+# 密钥生成
+openssl rand -base64 32   # JWT_SECRET
+openssl rand -hex 32      # ENCRYPTION_KEY
+```
+
+#### Step 5：配置 CI/CD
+
+在 GitHub 仓库 Settings → Secrets and variables → Actions 添加：
+
+| Secret | 说明 |
+|--------|------|
+| `DEPLOY_HOST` | 服务器 IP |
+| `DEPLOY_USER` | SSH 用户名（如 deploy） |
+| `DEPLOY_SSH_PORT` | SSH 端口（如 22000） |
+| `DEPLOY_SSH_KEY` | SSH 私钥（`cat ~/.ssh/id_ed25519`） |
+
+#### Step 6：首次部署
+
+```bash
+# 本地构建并推送镜像
+docker build -t ghcr.io/your-org/my-new-service:latest .
+docker push ghcr.io/your-org/my-new-service:latest
+
+# 服务器上启动
+cd /opt/project/my-new-service
+docker compose pull
+docker compose up -d
+
+# 验证
+curl https://my-new-service.example.com/health
+```
+
+#### Step 7：后续自动部署
+
+推送代码到 master/main 分支即可自动部署：
+
+```bash
+git add .
+git commit -m "feat: initial deployment"
+git push origin master
+```
+
+### 13.3 命令速查
+
+```bash
+# 服务器操作
+docker compose ps                    # 查看状态
+docker compose logs -f               # 查看日志
+docker compose pull && up -d         # 拉取并重启
+docker compose restart               # 重启服务
+
+# 镜像版本管理
+cat docker-tag.env                   # 查看当前版本
+vi docker-tag.env                   # 更新 IMAGE_TAG
+```
+
+### 13.4 常见问题
+
+| 问题 | 解决 |
+|------|------|
+| Traefik 404 | 检查容器是否在 `proxy` 网络，label 是否正确 |
+| 数据库连接失败 | 确认 `POSTGRES_HOST=postgres`，容器在 `db-net` 网络 |
+| CI/CD 失败 | 检查 GitHub Secrets 配置，服务器 SSH 密钥授权 |
 
 ---
 

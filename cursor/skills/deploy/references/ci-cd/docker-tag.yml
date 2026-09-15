@@ -1,0 +1,174 @@
+# =============================================================================
+# 镜像标签管理 + 部署 Workflow
+# 用途：构建镜像 → 推送 GHCR → SSH 部署
+#
+# 触发条件：
+#   - master/main 分支 push
+#   - 手动触发（workflow_dispatch）
+#
+# 需要的 GitHub Secrets：
+#   DEPLOY_HOST          服务器 IP
+#   DEPLOY_USER          SSH 用户名（如 deploy）
+#   DEPLOY_SSH_PORT      SSH 端口（如 22000）
+#   DEPLOY_SSH_KEY       SSH 私钥
+#
+# 需要的 GitHub Variables（可选）：
+#   DEPLOY_PRIMARY_BRANCH   主部署分支（master/main），不填时自动判定
+#
+# 模板变量说明：
+#   {{PROJECT_NAME}}       项目名
+#   {{IMAGE_REGISTRY}}     镜像仓库（如 ghcr.io/your-org）
+#   {{APP_PORT}}           应用端口
+#   {{DEPLOY_DIR}}         服务器部署目录（如 /opt/project/your-app）
+# =============================================================================
+
+name: Build, Push & Deploy
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  PROJECT_NAME: {{PROJECT_NAME}}
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  APP_PORT: {{APP_PORT}}
+  DEPLOY_PRIMARY_BRANCH: ${{ vars.DEPLOY_PRIMARY_BRANCH }}
+
+jobs:
+  # ─── 分支门控：只从主分支部署 ────────────────────────────────────────────
+  gate:
+    name: Branch Gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.gate.outputs.should_deploy }}
+    steps:
+      - name: Determine primary branch
+        id: gate
+        run: |
+          set -e
+          configured="${{ env.DEPLOY_PRIMARY_BRANCH }}"
+          if [ -n "${configured}" ]; then
+            [ "${configured}" = "master" ] || [ "${configured}" = "main" ] || {
+              echo "::error::DEPLOY_PRIMARY_BRANCH must be master or main"
+              exit 1
+            }
+            preferred="${configured}"
+          elif git ls-remote --exit-code origin refs/heads/master >/dev/null 2>&1; then
+            preferred="master"
+          else
+            preferred="main"
+          fi
+          if [ "${{ github.ref_name }}" = "${preferred}" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "⏭ Skipping: triggered by ${GITHUB_REF_NAME}, primary is ${preferred}"
+          fi
+
+  # ─── 构建 & 推送镜像 ────────────────────────────────────────────────────
+  build:
+    name: Build & Push Image
+    needs: gate
+    if: needs.gate.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REGISTRY }}/${{ env.PROJECT_NAME }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract variables
+        id: vars
+        run: |
+          echo "short_sha=$(echo '${{ github.sha }}' | cut -c1-8)" >> "$GITHUB_OUTPUT"
+          echo "image_tag=sha-$(echo '${{ github.sha }}' | cut -c1-8)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "## 🏗️ Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: `${{ env.IMAGE_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ steps.meta.outputs.tags }}`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: `${{ github.sha }}`" >> $GITHUB_STEP_SUMMARY
+
+  # ─── 部署到服务器 ───────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Server
+    needs: [gate, build]
+    if: needs.gate.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          IMAGE_REGISTRY: ${{ env.IMAGE_REGISTRY }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_SSH_PORT }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/project/${{ env.PROJECT_NAME }}
+            
+            # 更新 docker-tag.env（记录版本历史）
+            echo "IMAGE_NAMESPACE=${REPO_OWNER}" > docker-tag.env
+            echo "IMAGE_TAG=${IMAGE_TAG}" >> docker-tag.env
+            
+            echo "📦 Pulling image: ${IMAGE_REGISTRY}/${PROJECT_NAME}:${IMAGE_TAG}"
+            docker compose pull
+            
+            echo "🚀 Restarting service..."
+            docker compose up -d --no-deps
+            
+            echo "✅ Deployment complete!"
+            docker compose ps
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🚀 Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Server**: \`${{ secrets.DEPLOY_HOST }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ env.IMAGE_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ needs.build.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

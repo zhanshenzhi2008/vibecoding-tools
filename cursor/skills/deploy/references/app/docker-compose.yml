@@ -1,0 +1,86 @@
+# =============================================================================
+# 应用服务 Docker Compose 模板
+# 用途：快速部署任意 Docker 化应用服务
+#
+# 网络分层：
+#   proxy      → Traefik 入口网络（公网访问）
+#   internal   → 内部服务通信网络（后端 ↔ 后端、前端 → 后端）
+#   db-net     → 数据库网络（PostgreSQL + Redis）
+#
+# 模板变量说明（部署时替换）：
+#   {{PROJECT_NAME}}     项目名（小写，用于容器名/卷名）
+#   {{DOMAIN}}          完整访问域名，如 "app.example.com"
+#   {{APP_PORT}}        应用容器端口，如 8080
+#   {{IMAGE_REGISTRY}}  镜像仓库，如 "ghcr.io/your-org"
+#
+# 部署位置：/opt/project/{{PROJECT_NAME}}/
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 应用服务
+  # ---------------------------------------------------------------------------
+  app:
+    image: {{IMAGE_REGISTRY}}/{{PROJECT_NAME}}:${IMAGE_TAG:-latest}
+    container_name: {{PROJECT_NAME}}
+    restart: unless-stopped
+    expose:
+      - "{{APP_PORT}}"
+    env_file:
+      - .env
+      # 可选：独立的 docker-tag.env（用于镜像版本管理）
+      # - docker-tag.env
+    networks:
+      - proxy      # Traefik 入口（公网访问）
+      - internal   # 内部服务通信
+      - db-net     # 数据库访问
+    labels:
+      # Traefik 路由
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.{{PROJECT_NAME}}.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.{{PROJECT_NAME}}.entrypoints=websecure"
+      - "traefik.http.routers.{{PROJECT_NAME}}.tls=true"
+      - "traefik.http.routers.{{PROJECT_NAME}}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.{{PROJECT_NAME}}.service={{PROJECT_NAME}}"
+      - "traefik.http.services.{{PROJECT_NAME}}.loadbalancer.server.port={{APP_PORT}}"
+      # HTTP → HTTPS 重定向
+      - "traefik.http.routers.{{PROJECT_NAME}}-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.{{PROJECT_NAME}}-http.entrypoints=web"
+      - "traefik.http.routers.{{PROJECT_NAME}}-http.middlewares={{PROJECT_NAME}}-https-redirect"
+      - "traefik.http.middlewares.{{PROJECT_NAME}}-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.{{PROJECT_NAME}}-https-redirect.redirectscheme.permanent=true"
+      # Portainer 权限控制（非管理员用户需要）
+      # - "io.portainer.accesscontrol.users={{PORTAINER_RESTRICTED_USER}}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:{{APP_PORT}}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - app-data:/data
+
+# =============================================================================
+# 网络配置
+# =============================================================================
+networks:
+  # Traefik 入口网络（公网访问）
+  proxy:
+    external: true
+    name: proxy
+  # 内部服务通信网络（后端 ↔ 后端）
+  internal:
+    external: true
+    name: internal
+  # 数据库网络
+  db-net:
+    external: true
+    name: db-net
+
+# =============================================================================
+# 卷
+# =============================================================================
+volumes:
+  app-data:
+    driver: local

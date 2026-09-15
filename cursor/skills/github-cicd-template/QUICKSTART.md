@@ -34,12 +34,7 @@ env:
   FRONTEND_DIR: agent-insight-web
   NODE_VERSION: '22'   # GitHub 推荐；禁止从旧项目抄 20
 
-  # 服务镜像版本（与部署环境一致）
-  MYSQL_IMAGE: mysql:8.4
-  MONGODB_IMAGE: mongo:8.3
-  REDIS_IMAGE: redis:8.8.0-alpine
-
-  # 初始化脚本（相对于仓库根）
+  # E2E
   SQL_INIT_SCRIPT: fixtures/mysql/init.sql
   MONGODB_INIT_SCRIPT: fixtures/mongodb/init.js
 
@@ -57,7 +52,7 @@ env:
 | `MONGODB_INIT_SCRIPT` | MongoDB 初始化脚本，不存在则跳过 |
 | `E2E_PORT` | Playwright 测试时 Vite dev server 端口 |
 
-> **CI 不需要配 secret**，不需要 SSH、不需要镜像 token、不需要服务器 IP。只需确保 SQL/MongoDB 初始化脚本路径正确。
+> **服务镜像版本**：直接改 `assets/ci-template.yml` 里 `services.mysql.image` 等，GitHub Actions services 块不支持 `${{ env.* }}` 表达式。
 
 ## CD 模板：env + secrets
 

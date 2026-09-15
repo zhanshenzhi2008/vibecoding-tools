@@ -26,9 +26,10 @@ env:
   NODE_VERSION: '22'                   # ← 改 6：Node 版本（GitHub 推荐 22，禁止抄旧项目的 20）
 
   # ── 服务镜像版本（与部署环境保持一致）────────────────────────────────
-  MYSQL_IMAGE: mysql:8.4               # ← 改 7：MySQL 版本
-  MONGODB_IMAGE: mongo:8.3            # ← 改 8：MongoDB 版本
-  REDIS_IMAGE: redis:8.8.0-alpine     # ← 改 9：Redis 版本
+  # ⚠️ services 块不支持 ${{ env.* }}，镜像版本直接写死在 services 下
+  # MYSQL_IMAGE: mysql:8.4               # ← 如需修改，直接改 ci-template.yml 里 services.mysql.image
+  # MONGODB_IMAGE: mongo:8.3            # ← 同上
+  # REDIS_IMAGE: redis:8.8.0-alpine    # ← 同上
 
   # ── SQL / MongoDB 初始化脚本 ────────────────────────────────────────
   SQL_INIT_SCRIPT: fixtures/mysql/init.sql          # ← 改 10：建表 SQL 路径（相对于仓库根）
@@ -47,7 +48,7 @@ jobs:
 
     services:
       mysql:
-        image: ${{ env.MYSQL_IMAGE }}
+        image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
           MYSQL_DATABASE: ${{ env.DB_NAME }}
@@ -61,7 +62,7 @@ jobs:
           --health-start-period=60s
 
       mongodb:
-        image: ${{ env.MONGODB_IMAGE }}
+        image: mongo:8.3
         ports:
           - 27017:27017
         options: >-
@@ -72,7 +73,7 @@ jobs:
           --health-start-period=10s
 
       redis:
-        image: ${{ env.REDIS_IMAGE }}
+        image: redis:8.8.0-alpine
         ports:
           - 6379:6379
         options: >-
@@ -195,7 +196,7 @@ jobs:
 
     services:
       mysql:
-        image: ${{ env.MYSQL_IMAGE }}
+        image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
           MYSQL_DATABASE: ${{ env.DB_NAME }}
@@ -209,7 +210,7 @@ jobs:
           --health-start-period=60s
 
       mongodb:
-        image: ${{ env.MONGODB_IMAGE }}
+        image: mongo:8.3
         ports:
           - 27017:27017
         options: >-

@@ -1,0 +1,43 @@
+# =============================================================================
+# 前端 Vue/React SPA Docker Compose 模板
+# 用途：纯静态前端（Vite/Webpack 构建），Nginx 托管
+#
+# 模板变量说明：
+#   {{PROJECT_NAME}}     项目名
+#   {{DOMAIN}}          完整访问域名
+# =============================================================================
+
+services:
+  web:
+    image: {{IMAGE_REGISTRY}}/{{PROJECT_NAME}}-web:${IMAGE_TAG:-latest}
+    container_name: {{PROJECT_NAME}}-web
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web.entrypoints=websecure"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web.tls=true"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web.service={{PROJECT_NAME}}-web"
+      - "traefik.http.services.{{PROJECT_NAME}}-web.loadbalancer.server.port=80"
+      # HTTP → HTTPS
+      - "traefik.http.routers.{{PROJECT_NAME}}-web-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web-http.entrypoints=web"
+      - "traefik.http.routers.{{PROJECT_NAME}}-web-http.middlewares={{PROJECT_NAME}}-web-redirect"
+      - "traefik.http.middlewares.{{PROJECT_NAME}}-web-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.{{PROJECT_NAME}}-web-redirect.redirectscheme.permanent=true"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+networks:
+  proxy:
+    external: true
+    name: proxy
