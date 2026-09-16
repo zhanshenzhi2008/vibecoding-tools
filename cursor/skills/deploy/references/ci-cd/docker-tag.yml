@@ -153,8 +153,11 @@ jobs:
             cd /opt/project/${{ env.PROJECT_NAME }}
             
             # 更新 docker-tag.env（记录版本历史）
-            echo "IMAGE_NAMESPACE=${REPO_OWNER}" > docker-tag.env
-            echo "IMAGE_TAG=${IMAGE_TAG}" >> docker-tag.env
+            {
+              echo "IMAGE_TAG=${IMAGE_TAG}"
+              echo "IMAGE_NAMESPACE=${REPO_OWNER}"
+              grep -v '^IMAGE_TAG=\|^IMAGE_NAMESPACE=' docker-tag.env
+            } > docker-tag.env.tmp && mv docker-tag.env.tmp docker-tag.env
             
             echo "📦 Pulling image: ${IMAGE_REGISTRY}/${PROJECT_NAME}:${IMAGE_TAG}"
             docker compose pull
