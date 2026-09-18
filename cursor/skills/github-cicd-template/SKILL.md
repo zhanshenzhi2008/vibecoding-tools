@@ -94,11 +94,8 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 
 | 文件 | 是什么 | 放哪里 | 用途 |
 |------|--------|--------|------|
-| `assets/ci-template.yml` | **GitHub Actions workflow**（CI 流程，测试验证） | 本地 → `.github/workflows/ci.yml` | **必选**：后端单元测试 + 前端单元测试 + 前端 E2E 测试。**CI 和 CD 必须分开**，职责单一、状态清晰 |
-| `assets/ci-cd-workflow-template.yml` | **GitHub Actions workflow**（CD 流程，部署上线） | 本地 → `.github/workflows/cd.yml` | **推荐**：build 镜像 → SSH **只拉镜像** → `docker compose up`。默认不拷贝 compose。90% 项目首选 |
-| `assets/compose-stack-template.yml` | **服务编排定义**（docker compose 文件） | 服务器 → `/opt/project/<repo>/docker-compose.yml` | 给 CD 模板配套（健康检查 / depends_on / 卷挂载） |
-| `assets/ci-cd-k8s-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-k8s.yml` | build 镜像 → `kubectl set image`。有 K8s 集群时用 |
-| `assets/ci-cd-static-template.yml` | **GitHub Actions workflow** | 本地 → `.github/workflows/cd-static.yml` | build 前端 → rsync 到 nginx。纯前端静态站用 |
+| `assets/ci-template.yml` | **GitHub Actions workflow**（CI 流程，测试验证） | 本地 → `.github/workflows/ci.yml` | **必选**：后端 Gradle 测试 + 前端单元测试。**CI 和 CD 必须分开**，职责单一、状态清晰 |
+| `assets/cd-template.yml` | **GitHub Actions workflow**（CD 流程，部署上线） | 本地 → `.github/workflows/cd.yml` | **必选**：build 镜像 → SSH **只拉镜像** → `docker compose up`。支持 `workflow_run`（监听 CI）和 `push main` 两种触发模式，默认 workflow_run |
 
 > **CI 和 CD 必须分开**，不要把 test 塞进 CD workflow 里。分开的好处：PR 阶段只跑 test（快，不触发构建），主分支阶段（`master`/`main`）才 build + 部署；状态页上 CI 和 CD 的通过/失败独立显示，不会互相干扰。
 
@@ -108,18 +105,12 @@ description: 生成 GitHub Actions CI/CD 工作流模板，覆盖 Spring Boot + 
 
 ### 第 1 步：选模板
 
-判断项目类型：
-
 ```
-Spring Boot + React/Vue + 一台服务器？
-  └─→ ci-cd-workflow-template.yml ✅（首选）+ compose-stack-template.yml
-
-已经是 K8s / Docker Swarm 集群？
-  └─→ ci-cd-k8s-template.yml
-
-只有静态前端？
-  └─→ ci-cd-static-template.yml
+Spring Boot (Gradle) + 前端 + 单台服务器 + docker compose？
+  └─→ assets/ci-template.yml（CI）+ assets/cd-template.yml（CD）
 ```
+
+其他场景（K8s / 纯静态站）暂不提供模板，有需要可扩展。
 
 ### 第 2 步：准备 4 个 GitHub Secret（默认方案）
 
@@ -323,8 +314,9 @@ git push
 
 ```bash
 # 远程服务器 / CD 脚本（默认）
-docker compose --env-file .env -f docker-compose.yml pull
-docker compose --env-file .env -f docker-compose.yml up -d
+# env_file 已在 compose yml 里声明，compose 自动读取；禁止加 --env-file 强制覆盖
+docker compose -f docker-compose.yml pull
+docker compose -f docker-compose.yml up -d
 
 # 本地开发（需要本地构建时）
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up -d --build
@@ -403,78 +395,110 @@ steps:
 
 ---
 
-## 5 个模板分别详解
+## 2 个模板分别详解
 
 ### 一句话先搞清楚两类文件
 
 | 类 | 文件名以...开头 | 谁用它 | 在哪跑 |
 |----|------------------|--------|--------|
-| **GitHub Actions workflow**（CI/CD 流程定义） | `ci-cd-*` | GitHub Actions runner | 云端 Ubuntu VM |
-| **服务编排**（docker compose 文件） | `compose-stack-*` | docker compose CLI | 你的服务器 |
+| **GitHub Actions workflow**（CI/CD 流程定义） | `ci-*` / `cd-*` | GitHub Actions runner | 云端 Ubuntu VM |
 
-> 4 个 `ci-cd-*.yml` / `ci-*.yml` 是"流程脚本"，1 个 `compose-stack-*.yml` 是"被它调度的服务定义"。
+> 2 个 `ci-*.yml` / `cd-*.yml` 是"流程脚本"
 
-### 模板 1：`ci-cd-workflow-template.yml`（**最常用**）
+### 模板 1：`ci-template.yml`（**必选**）
 
 **适用场景**：
-- Spring Boot 后端 + React/Vue 前端
-- 单台 / 少数服务器（VPS、ECS、轻量应用服务器）
-- 用 docker compose 管服务编排
-- 镜像托管 ghcr.io（GitHub Container Registry，免费）
+- Spring Boot (Gradle) 后端 + 前端项目
+- 后端单元测试 + 前端单元测试 + （可选）前端 E2E
 
 **核心流程**：
 
 ```
-git push master   # 若仓库主分支是 main，则改成 git push main
+git push main / PR → main
+  ↓
+Job 1: backend-test (Ubuntu runner)
+  ├── checkout
+  ├── setup Java 21
+  ├── cache Gradle
+  ├── ./gradlew test
+  └── upload build/reports/tests/test/
+
+Job 2: frontend-test (Ubuntu runner)
+  ├── checkout
+  ├── setup Node 22
+  ├── cache npm
+  ├── npm ci
+  └── npm test
+
+Job 3: frontend-e2e（默认注释，按需解开）
+  ├── services: postgres + redis（按项目数据库调整）
+  ├── start backend (bootRun)
+  ├── install Playwright browsers
+  └── npm run test:e2e
+```
+
+**E2E 默认是注释的**，因为：
+- 不是每个项目都有 E2E（小型项目/纯 API 项目不需要）
+- E2E 配置差异大（Playwright / Cypress / 浏览器类型不同）
+- 后端启动慢会拖慢 CI
+
+需要时解开 `assets/ci-template.yml` 里 `frontend-e2e` 整段注释，按项目实际调整。
+
+**怎么用**：
+
+1. 复制到 `.github/workflows/ci.yml`
+2. 改 `env` 块 4 个变量（`BACKEND_DIR` / `JAVA_VERSION` / `FRONTEND_DIR` / `NODE_VERSION`）
+3. （可选）解开 E2E job 并按需调整 services + 启动方式
+4. 推代码
+
+### 模板 2：`cd-template.yml`（**必选**）
+
+**适用场景**：
+- Spring Boot 后端 + React/Vue 前端
+- 单台服务器（VPS / ECS）
+- 用 docker compose 管服务编排
+- 镜像托管 ghcr.io
+
+**两种触发模式**（默认 `workflow_run`）：
+
+| 模式 | 触发条件 | 何时用 |
+|------|----------|--------|
+| **A（推荐）** | `workflow_run: [CI] types: [completed]` | CI/CD 分离，状态独立 |
+| B | `push: branches: [main]` | 简单场景，CI/CD 合并 |
+
+**核心流程**（模式 A）：
+
+```
+CI 跑完（success）
   ↓
 Job 1: build (Ubuntu runner)
   ├── checkout
-  ├── docker buildx 准备
-  ├── login ghcr.io
-  ├── build & push backend → ghcr.io/owner/proj/backend:sha
-  └── build & push frontend → ghcr.io/owner/proj/frontend:sha
-  ↓
+  ├── docker buildx
+  ├── login ghcr.io (GITHUB_TOKEN)
+  └── build & push → ghcr.io/owner/proj:sha + :latest
+
 Job 2: deploy (Ubuntu runner, depends_on: build)
-  ├── SSH 私钥 fingerprint 校验（防呆）
-  ├── echo：不拷贝 compose 到远程（SCP 步骤注释保留）
+  ├── SSH 私钥 fingerprint 校验
+  ├── echo：不拷贝 compose
   ├── ssh 到服务器
   ├── docker login ghcr.io
-  ├── docker compose pull  <services>
+  ├── 更新 docker-tag.env（用 tee 原子写入，不用 mv tmp）
+  ├── docker compose pull <services>（compose yml 的 env_file 自动生效，**禁止加 --env-file 强制覆盖**）
   └── docker compose up -d <services>
 ```
 
-> **不要**在 Job 2 默认 SCP `docker-compose.yml`。compose 已在服务器，CD 只拉镜像。SCP 步骤在 demo CD 里注释保留，解开前必须确认不会覆盖远程本地配置。
+> **镜像 tag 格式**：推荐 `{服务名}-{yyyyMMddHHmmss}`（如 `my-app-backend-20250918103000`），CI 构建时生成，CD 写入 `docker-tag.env`。不要用 `mv tmp` 写 docker-tag.env，用 `tee` 保留原文件权限。
+
+> **env_file 约定**：compose yml 已有 `env_file: ./docker-tag.env`，CD 只写入值，**禁止用 `--env-file` 覆盖**（会绕开 yml 配置）。
+
+> **不要**在 Job 2 默认 SCP `docker-compose.yml`。compose 已在服务器，CD 只拉镜像。
 
 **怎么用**：
 
 1. 复制到 `.github/workflows/cd.yml`
-2. 改 `env` 块 4 个变量
-3. 在 GitHub 配 4 个 secret
+2. 改 `env` 块 5 个变量（`IMAGE_PROJECT` / `COMPOSE_SERVICES` / `DEPLOY_PATH` 等）
+3. 在 GitHub 配 5 个 secret（`DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_PORT` / `DEPLOY_SSH_KEY` / `DEPLOY_PATH`）
 4. 推代码
-
-### 模板 2：`ci-cd-k8s-template.yml`
-
-**适用场景**：已有 K8s 集群（EKS / AKS / 自建 K8s）。
-
-**核心差异**：部署阶段从 `docker compose up` 换成 `kubectl set image`。
-
-```bash
-# 用法变化
-kubectl set image deployment/my-backend \
-  backend=ghcr.io/owner/proj/backend:${{ github.sha }}
-```
-
-### 模板 3：`ci-cd-static-template.yml`
-
-**适用场景**：纯静态站（VitePress / Hugo / Next.js SSG / 纯 HTML）。
-
-**核心差异**：没有后端镜像，直接 `rsync` 到 nginx 目录。
-
-### 模板 4：`compose-stack-template.yml`（配套用）
-
-**为什么需要**：模板 1 默认假设服务器上已有 `docker-compose.yml`。本模板是一份**生产级**的 compose 文件范例（健康检查、depends_on condition、卷挂载），**放到服务器上**，不是放到 GitHub Actions 上。
-
-Traefik labels 写在这份 compose 里（Demo 也一样）。路由器必须显式 `service=`，不要靠「和路由器同名」的默认查找。详见下方「坑 2.2」。
 
 ---
 

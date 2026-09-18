@@ -115,7 +115,8 @@ jobs:
         id: vars
         run: |
           echo "short_sha=$(echo '${{ github.sha }}' | cut -c1-8)" >> "$GITHUB_OUTPUT"
-          echo "image_tag=sha-$(echo '${{ github.sha }}' | cut -c1-8)" >> "$GITHUB_OUTPUT"
+          # 镜像 tag 格式：服务名-年月日時分秒（如 ai-job-hunter-be-20250918103000）
+          echo "image_tag=$(echo '${{ env.PROJECT_NAME }}' | sed 's/_/-/g')-$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
 
       - name: Summary
         run: |
@@ -152,16 +153,28 @@ jobs:
             set -e
             cd /opt/project/${{ env.PROJECT_NAME }}
             
-            # 更新 docker-tag.env（记录版本历史）
+            # ── 镜像 tag 格式说明 ─────────────────────────────────────────────
+            # 推荐：服务名-年月日時分秒（如 ai-job-hunter-be-20250918103000）
+            # 禁止用 mv 重命名临时文件：服务器 docker-tag.env 通常属于部署用户，
+            #   tmp 文件属于 root/mktemp，会因权限差异报 Permission denied。
+            #   用 tee 直接写入即可（原子操作，保留原文件权限）。
+            #
+            # ── docker-tag.env 与 compose yml 的配合关系 ────────────────────
+            # compose yml 里已有 env_file: ./docker-tag.env，部署脚本只需写入该文件，
+            #   不需要也不应该用 --env-file 强制覆盖（会绕开 yml 的 env_file 配置）。
+            #   CD 只负责写入变量值，由 compose yml 决定从哪些 env_file 加载。
+            # ─────────────────────────────────────────────────────────────────
+
+            echo "=== Update docker-tag.env ==="
             {
               echo "IMAGE_TAG=${IMAGE_TAG}"
               echo "IMAGE_NAMESPACE=${REPO_OWNER}"
-              grep -v '^IMAGE_TAG=\|^IMAGE_NAMESPACE=' docker-tag.env
-            } > docker-tag.env.tmp && mv docker-tag.env.tmp docker-tag.env
-            
+              grep -v '^IMAGE_TAG=\|^IMAGE_NAMESPACE=' docker-tag.env 2>/dev/null || true
+            } | tee docker-tag.env > /dev/null
+
             echo "📦 Pulling image: ${IMAGE_REGISTRY}/${PROJECT_NAME}:${IMAGE_TAG}"
             docker compose pull
-            
+
             echo "🚀 Restarting service..."
             docker compose up -d --no-deps
             

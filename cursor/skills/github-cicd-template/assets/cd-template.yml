@@ -1,0 +1,179 @@
+# =============================================================================
+# GitHub Actions CD 模板：Docker Compose 部署
+# 适用：Spring Boot + 前端，单台服务器，服务器只拉镜像
+# 用法：复制到 .github/workflows/cd.yml，改顶部 env 块
+#
+# 两种触发模式（按需选择）：
+#   A. workflow_run：监听 CI 完成（CI + CD 分开，状态清晰）
+#   B. push main   ：push 到 main 直接触发（CI+CD 合并，简单场景用）
+# 默认用 workflow_run 模式。如需改为 push 模式，注释掉 workflow_run 块，
+# 解开 push + workflow_dispatch 块即可。
+# =============================================================================
+
+name: CD
+
+on:
+  # ── 模式 A（推荐）：监听 CI 完成才部署 ────────────────────────────────
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+  # ── 模式 B：push 到 main 直接部署（解开下面注释即可）────────────────
+  # push:
+  #   branches: [main]
+  # workflow_dispatch:
+
+env:
+  # ── 镜像配置（公开信息，配 env）────────────────────────────────────
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_PROJECT: ai-job-hunter-be              # ← 改 1：项目名
+  COMPOSE_FILE: docker-compose.yml
+  COMPOSE_SERVICES: ai-job-hunter-be           # ← 改 2：compose 里的服务名
+
+  # ── 服务器配置（敏感信息，配 GitHub Secrets）────────────────────────
+  DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}       # ← 改 3：服务器项目目录
+  DEPLOY_PRIMARY_BRANCH: ${{ vars.DEPLOY_PRIMARY_BRANCH || 'main' }}
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+jobs:
+  # ── Step 1: 构建 & 推送镜像到 GHCR ───────────────────────────────────
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_PROJECT }}:${{ github.event.workflow_run.head_sha || github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_PROJECT }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Get commit info
+        id: commit
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          COMMIT_MSG=$(gh api repos/${{ github.repository }}/commits/${SHA} --jq '.commit.message' 2>/dev/null | head -1)
+          if [ -z "$COMMIT_MSG" ]; then
+            COMMIT_MSG="$SHA"
+          fi
+          echo "message=${COMMIT_MSG}" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Deploy: ${{ env.IMAGE_PROJECT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ steps.commit.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Message**: ${{ steps.commit.outputs.message }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_PROJECT }}:${{ steps.commit.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ── Step 2: 部署到服务器 ─────────────────────────────────────────────
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      # 工作流命名：显示 commit message
+      - name: Set workflow run name
+        run: |
+          set +e
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          COMMIT_MSG=$(gh api repos/${{ github.repository }}/commits/${SHA} --jq '.commit.message' 2>/dev/null | head -1)
+          if [ -z "$COMMIT_MSG" ]; then
+            COMMIT_MSG="$SHA"
+          fi
+          gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id || github.run_id }} \
+            -X PATCH \
+            -f name="🚀 ${COMMIT_MSG%$'\n'*}" || true
+
+      # CI 检查（仅 workflow_run 模式）
+      - name: Check CI status
+        if: github.event.workflow_run.conclusion != ''
+        run: |
+          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+            echo "CI did not succeed, skipping deployment"
+            exit 78
+          fi
+
+      # 分支门控
+      - name: Check deploy branch
+        run: |
+          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          if [ "$BRANCH" != "${{ env.DEPLOY_PRIMARY_BRANCH }}" ]; then
+            echo "Not primary branch ($BRANCH), skipping"
+            exit 78
+          fi
+
+      # SSH key 校验
+      - name: Validate SSH key
+        run: |
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/ssh_key
+          chmod 600 ~/ssh_key
+          ssh-keygen -l -f ~/ssh_key
+          echo "SSH key validated"
+
+      # 部署
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: IMAGE_PROJECT,IMAGE_NAMESPACE,DEPLOY_PATH,COMPOSE_FILE,COMPOSE_SERVICES
+          script: |
+            set -e
+            cd ${{ env.DEPLOY_PATH }}
+            # 镜像 tag 格式：{服务名}-{年月日時分秒}（如 my-app-backend-20250918103000）
+            IMAGE_TAG="$(echo '${{ env.IMAGE_PROJECT }}' | sed 's/_/-/g')-$(date -u +%Y%m%d%H%M%S)"
+
+            echo "=== Login to GHCR ==="
+            echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # ── docker-tag.env 写入说明 ─────────────────────────────────────────
+            # 禁止用 mv tmp：服务器 docker-tag.env 属于部署用户，tmp 文件属于
+            #   root/mktemp，跨用户 mv 会报 Permission denied。用 tee 原子写入。
+            # 禁止加 --env-file 强制覆盖：compose yml 里已有 env_file: ./docker-tag.env，
+            #   --env-file 会绕开 yml 配置。CD 只写值，由 yml 决定加载方式。
+            # ──────────────────────────────────────────────────────────────────
+
+            echo "=== Update docker-tag.env ==="
+            {
+              echo "IMAGE_TAG=$IMAGE_TAG"
+              echo "IMAGE_NAMESPACE=$IMAGE_NAMESPACE"
+              grep -v '^IMAGE_TAG=\|^IMAGE_NAMESPACE=' docker-tag.env 2>/dev/null || true
+            } | tee docker-tag.env > /dev/null
+
+            echo "=== Pull and restart ==="
+            # 不加 --env-file：env_file 已在 compose yml 里声明，compose 自动读取
+            docker compose -f ${{ env.COMPOSE_FILE }} pull ${{ env.COMPOSE_SERVICES }}
+            docker compose -f ${{ env.COMPOSE_FILE }} up -d --no-deps ${{ env.COMPOSE_SERVICES }}
+
+            echo "=== Done ==="
+            docker compose ps
+
+      - name: Cleanup
+        run: rm -f ~/ssh_key

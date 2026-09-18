@@ -229,6 +229,10 @@ services:
 
 **CD 默认不向远程拷贝 compose / `.env`**：编排和密钥在服务器本地维护。GitHub Actions 只 SSH 登录镜像仓库并 `pull` + `up`。
 
+**env_file 约定**：compose yml 已有 `env_file: ./docker-tag.env`，CD 只写入该文件值，**禁止用 `--env-file` 覆盖**（会绕开 yml 配置）。写入用 `tee` 而非 `mv tmp`，避免跨用户权限问题。
+
+**镜像 tag 格式**：推荐 `{服务名}-{yyyyMMddHHmmss}`（如 `ai-job-hunter-be-20250918103000`），CI 构建时生成，CD 写入 `docker-tag.env`。
+
 **首次部署步骤（一次性，运维手工做）**：
 
 ```bash
@@ -255,6 +259,14 @@ docker network create db-net
 ```yaml
 # CI SSH 脚本核心逻辑
 cd /opt/project/ai-job-hunter          # 切到部署目录
+
+# 更新 docker-tag.env（写入用 tee 而非 mv，避免权限问题）
+{
+  echo "IMAGE_TAG=${IMAGE_TAG}"
+  echo "IMAGE_NAMESPACE=${IMAGE_NAMESPACE}"
+  grep -v '^IMAGE_TAG=\|^IMAGE_NAMESPACE=' docker-tag.env 2>/dev/null || true
+} | tee docker-tag.env > /dev/null
+
 docker compose pull ai-job-hunter       # 只拉镜像
 docker compose up -d --no-deps          # 不重启依赖（DB 等）
 docker image prune -f --filter "until=72h"
